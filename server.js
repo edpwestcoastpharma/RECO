@@ -204,8 +204,10 @@ function scoreCompanyLedger(lines) {
   if (/\bVch Type\b/i.test(top)) score += 10;
   if (/\bBANK PAYMENT\b/i.test(all)) score += 10;
   if (/\bBy\s+\(as per details\).*?\bPURCHASE\b/i.test(all)) score += 30;
+  if (/\bPACKING MATERIAL PURCHASE\b/i.test(all) || /\bTDS ON PURCHASE OF GOODS\b/i.test(all)) score += 35;
   if (/Account Statement For/i.test(top)) score -= 100;
   if (/\bCr\s+\(as per details\).*?\bSales\b/i.test(all)) score -= 40;
+  if (/\bGST SALES\b/i.test(all) && !/\bPURCHASE\b/i.test(all)) score -= 35;
   if (/\bBank Receipt\b/i.test(all)) score -= 10;
   return score;
 }
@@ -296,6 +298,15 @@ function normaliseRef(ref) {
   return value;
 }
 
+function invoiceKey(ref, date = "") {
+  const key = normaliseRef(ref);
+  if (!/^\d+$/.test(key) || !date) return key;
+  const parsed = parseDdMmYy(date);
+  if (parsed.getTime() <= 0) return key;
+  const year = parsed.getMonth() >= 3 ? parsed.getFullYear() : parsed.getFullYear() - 1;
+  return `${key}@${String(year).slice(-2)}-${String(year + 1).slice(-2)}`;
+}
+
 function normaliseAlphaNumericInvoiceRef(value) {
   const simple = String(value || "").match(/^([A-Z])([0-9OILS]+)(?:\([A-Z]\))?$/i);
   if (simple) {
@@ -322,7 +333,7 @@ function parseAmount(raw) {
 
 function parseDate(line) {
   const text = String(line || "");
-  const tally = text.match(/\b(\d{1,2})-([A-Za-z]{3})-(\d{2,4})\b/);
+  const tally = text.match(/\b(\d{1,2})-([A-Za-z]{3})-(\d{2,4})/);
   if (tally) {
     const months = {
       JAN: "01",
@@ -344,11 +355,43 @@ function parseDate(line) {
 
   const numeric =
     text.match(/\b(?:DATE|DT)[: -]*(\d{1,2})[-/.](\d{1,2})\s*[-/.]\s*(\d{2,4})\b/i) ||
-    text.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
+    text.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/) ||
+    text.match(/\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/);
   if (!numeric) return "";
   const [, dd, mm, yy] = numeric;
   if (Number(mm) < 1 || Number(mm) > 12) return "";
   return `${dd.padStart(2, "0")}.${mm.padStart(2, "0")}.${yy.slice(-2)}`;
+}
+
+function parseLedgerPeriod(lines) {
+  const months = {
+    JAN: "01",
+    FEB: "02",
+    MAR: "03",
+    APR: "04",
+    MAY: "05",
+    JUN: "06",
+    JUL: "07",
+    AUG: "08",
+    SEP: "09",
+    OCT: "10",
+    NOV: "11",
+    DEC: "12"
+  };
+  for (const line of lines.slice(0, 120)) {
+    const match = String(line || "").match(
+      /(\d{1,2})-([A-Za-z]{3})-(\d{2,4})\s+to\s+(\d{1,2})-([A-Za-z]{3})-(\d{2,4})/i
+    );
+    if (!match) continue;
+    const startMonth = months[match[2].slice(0, 3).toUpperCase()];
+    const endMonth = months[match[5].slice(0, 3).toUpperCase()];
+    if (!startMonth || !endMonth) continue;
+    return {
+      startDate: `${match[1].padStart(2, "0")}.${startMonth}.${match[3].slice(-2)}`,
+      endDate: `${match[4].padStart(2, "0")}.${endMonth}.${match[6].slice(-2)}`
+    };
+  }
+  return { startDate: "", endDate: "" };
 }
 
 function parseDocumentDate(line) {
@@ -361,7 +404,7 @@ function parseDocumentDate(line) {
 }
 
 function extractAmounts(line) {
-  return [...line.matchAll(/(?:^|\s)(\d{1,3}(?:,\d{2,3})*(?:\.\d{2})|\d+(?:\.\d{2}))/g)].map((m) =>
+  return [...line.matchAll(/(?:^|\s)(\d{1,3}(?:,\d{2,3})*(?:\.\d{2,3})|\d+(?:\.\d{2,3}))/g)].map((m) =>
     parseAmount(m[1])
   );
 }
@@ -390,7 +433,10 @@ function extractRefsFromLines(lines) {
     new RegExp(`\\bINVO[A-Z]+\\s+NO[-. ]*[-]?\\s*${refPattern}\\b(?=[\\s,]|$)`, "gi"),
     new RegExp(`\\bNew Ref\\s+${simpleRefPattern}\\b(?=\\s+\\d|\\s+Cr|\\s+Dr|$)`, "gi"),
     new RegExp(`\\bAgst Ref\\s+(?!BP\\b)${simpleRefPattern}\\b(?=\\s+\\d|\\s+Cr|\\s+Dr|$)`, "gi"),
-    new RegExp(`\\bINVO[A-Z]+\\s+NO\\s*[:.-]?\\s*${simpleRefPattern}\\b`, "gi")
+    /\bNew Ref\s+([A-Z]?\d+[A-Z]?)\b(?=\s+\d|\s+Cr|\s+Dr|$)/gi,
+    /\bAgst Ref\s+(?!BP\b)([A-Z]?\d+[A-Z]?)\b(?=\s+\d|\s+Cr|\s+Dr|$)/gi,
+    new RegExp(`\\bINVO[A-Z]+\\s+NO\\s*[:.-]?\\s*${simpleRefPattern}\\b`, "gi"),
+    /\b(?:INVO[A-Z]*|BILL)\s+NO\s*[:;'"".-]?\s*([A-Z]?\d+[A-Z]?)\b/gi
   ];
 
   for (let i = 0; i < lines.length; i += 1) {
@@ -420,9 +466,9 @@ async function parseCompanyLedger(filePath) {
 
 function parseCompanyLedgerLines(allLines) {
   const lines = stopAtLastClosingBalance(allLines);
-  const openingLine = lines.find((line) => /Opening Balance/i.test(line)) || "";
-  const openingBalance = /1-Apr-25|01-Apr-25|1\/Apr\/25/i.test(openingLine) ? lastAmount(openingLine) : 0;
-  const closingLine = [...lines].reverse().find((line) => /To\s+Closing Balance/i.test(line)) || "";
+  const period = parseLedgerPeriod(allLines);
+  const openingBalance = balanceAmountAtLabel(lines, /Opening Balance/i);
+  const closingBalance = lastBalanceAmountAtLabel(lines, /To\s+Closing Balance|Closing Balance/i);
   const blocks = [];
   const payments = [];
   const adjustments = [];
@@ -440,25 +486,26 @@ function parseCompanyLedgerLines(allLines) {
         source: lines[i]
       });
     }
-    if (!isCompanyPurchaseHeader(lines[i])) continue;
+    if (!isCompanyPurchaseHeader(lines[i], lines, i)) continue;
     const blockLines = [lines[i]];
     for (let j = i + 1; j < lines.length; j += 1) {
+      if (j > i + 1 && isCompanyPurchaseHeader(lines[j], lines, j)) break;
       if (isCompanyVoucherHeader(lines[j])) break;
       blockLines.push(lines[j]);
     }
 
     const refs = extractRefsFromLines(blockLines);
-    const tdsLine = blockLines.find((line) => /TDS ON (?:PROFESSIONAL|CONTRACTOR)/i.test(line)) || "";
+    const tdsLine = blockLines.find((line) => /\bTDS ON\b/i.test(line)) || "";
     const tds = lastAmount(tdsLine);
     tdsTotal += tds;
-    const netAmount = lastAmount(blockLines[0]);
+    const netAmount = companyPurchaseHeaderAmount(blockLines);
     const postingDate = parseDate(blockLines[0]) || currentDate;
     const date = parseDocumentDate(blockLines.join(" ")) || postingDate;
 
-    for (const ref of refs.values()) {
+    for (const ref of pruneDuplicateBlockRefs([...refs.values()])) {
       blocks.push({
         ref: ref.ref,
-        key: ref.key,
+        key: invoiceKey(ref.ref, date),
         date,
         postingDate,
         amount: netAmount,
@@ -470,8 +517,9 @@ function parseCompanyLedgerLines(allLines) {
 
   return {
     ledgerType: "company-tally",
+    period,
     openingBalance,
-    closingBalance: lastAmount(closingLine),
+    closingBalance,
     tdsTotal,
     invoices: dedupeInvoices(blocks),
     payments,
@@ -479,8 +527,70 @@ function parseCompanyLedgerLines(allLines) {
   };
 }
 
-function isCompanyPurchaseHeader(line) {
-  return /\bBy\s+\(as per details\)/i.test(line) && /\bPURCHASE\b/i.test(line);
+function pruneDuplicateBlockRefs(refs) {
+  const keys = new Set(refs.map((ref) => ref.key));
+  return refs.filter((ref) => {
+    if (!/^\d+$/.test(ref.key)) return true;
+    for (const key of keys) {
+      if (key !== ref.key && /^\d+$/.test(key) && key.endsWith(ref.key) && key.length > ref.key.length) return false;
+    }
+    return true;
+  });
+}
+
+function balanceAmountAtLabel(lines, labelPattern) {
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!labelPattern.test(lines[i])) continue;
+    const sameLine = firstAmount(lines[i]) || lastAmount(lines[i]);
+    if (sameLine) return sameLine;
+    for (let j = i + 1; j < Math.min(lines.length, i + 4); j += 1) {
+      const amount = firstAmount(lines[j]) || lastAmount(lines[j]);
+      if (amount) return amount;
+    }
+  }
+  return 0;
+}
+
+function lastBalanceAmountAtLabel(lines, labelPattern) {
+  let amount = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!labelPattern.test(lines[i])) continue;
+    const sameLine = firstAmount(lines[i]) || lastAmount(lines[i]);
+    if (sameLine) {
+      amount = sameLine;
+      continue;
+    }
+    for (let j = i + 1; j < Math.min(lines.length, i + 4); j += 1) {
+      const nextAmount = firstAmount(lines[j]) || lastAmount(lines[j]);
+      if (nextAmount) {
+        amount = nextAmount;
+        break;
+      }
+    }
+  }
+  return amount;
+}
+
+function isCompanyPurchaseHeader(line, lines = [], index = 0) {
+  if (/\bBy\s+\(as per details\)/i.test(line) && /\bPURCHASE\b/i.test(line)) return true;
+  const nearby = lines.slice(index, Math.min(lines.length, index + 8)).join(" ");
+  return (
+    (/^\s*(?:Dr\s*)?$/i.test(line) || /^\s*Dr\s+\(as per details\)/i.test(line) || (parseDate(line) && /\bDr\b/i.test(line))) &&
+    /\(as per details\)/i.test(nearby) &&
+    /\bPURCHASE\b/i.test(nearby) &&
+    !/\bGST SALES\b/i.test(nearby)
+  );
+}
+
+function companyPurchaseHeaderAmount(blockLines) {
+  const headerAmount = lastAmount(blockLines[0]);
+  if (headerAmount) return headerAmount;
+  const detailIndex = blockLines.findIndex((line) => /\(as per details\)/i.test(line));
+  for (let i = Math.max(0, detailIndex); i < Math.min(blockLines.length, detailIndex + 4); i += 1) {
+    const amount = lastAmount(blockLines[i]);
+    if (amount) return amount;
+  }
+  return 0;
 }
 
 function stopAtFirstClosingBalance(lines) {
@@ -501,7 +611,7 @@ function stopAtLastClosingBalance(lines) {
 }
 
 function isVoucherStart(line) {
-  return /^\d{1,2}[-/.][A-Za-z]{3}[-/.]\d{2,4}\b/.test(line);
+  return /^\d{1,2}[-/.][A-Za-z]{3}[-/.]\d{2,4}\b/.test(line) || /^\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}/.test(line);
 }
 
 function isCompanyVoucherHeader(line) {
@@ -528,9 +638,11 @@ function parsePartyLedgerLines(lines, suppliedPartyName = "") {
     return parseAccountStatementPartyLedger(lines, suppliedPartyName);
   }
 
+  const period = parseLedgerPeriod(lines);
   const openingLine = lines.find((line) => /Opening Balance/i.test(line)) || "";
   const balanceLines = lines.filter((line) => /\b(?:Closing Balance|Balance)\b/i.test(line));
   const closingLine = balanceLines.at(-1) || "";
+  const balanceHistory = extractBalanceHistory(lines, period);
   const invoices = [];
   const payments = [];
   let tdsTotal = 0;
@@ -552,6 +664,11 @@ function parsePartyLedgerLines(lines, suppliedPartyName = "") {
         amount: lastAmount(lines[i]),
         source: lines[i]
       });
+    }
+    const legacySale = parseLegacyPartySale(lines, i, currentDate);
+    if (legacySale) {
+      invoices.push(legacySale);
+      continue;
     }
     if (!/Cr\s+\(as per details\)/i.test(lines[i])) continue;
     const blockLines = [lines[i]];
@@ -579,7 +696,7 @@ function parsePartyLedgerLines(lines, suppliedPartyName = "") {
       const amount = lastAmount(line) || headerAmount;
       invoices.push({
         ref,
-        key: normaliseRef(ref),
+        key: invoiceKey(ref, parseDate(line) || parseDate(blockLines.join(" ")) || currentDate),
         date: parseDate(line) || parseDate(blockLines.join(" ")) || currentDate,
         amount,
         source: line
@@ -588,7 +705,7 @@ function parsePartyLedgerLines(lines, suppliedPartyName = "") {
     if (!hasNewRef && headerRef && /Sales/i.test(blockLines[0])) {
       invoices.push({
         ref: headerRef,
-        key: normaliseRef(headerRef),
+        key: invoiceKey(headerRef, parseDate(blockLines[0]) || parseDate(blockLines.join(" ")) || currentDate),
         date: parseDate(blockLines[0]) || parseDate(blockLines.join(" ")) || currentDate,
         amount: headerAmount,
         source: blockLines[0]
@@ -599,13 +716,78 @@ function parsePartyLedgerLines(lines, suppliedPartyName = "") {
   return {
     ledgerType: "party-tally",
     partyName: suppliedPartyName || guessPartyName(lines),
-    openingBalance: lastAmount(openingLine),
-    closingBalance: lastAmount(closingLine),
+    period,
+    openingBalance: firstAmount(openingLine) || lastAmount(openingLine),
+    closingBalance: (balanceHistory.at(-1)?.amount || lastAmount(closingLine)),
+    balanceHistory,
     tdsTotal,
     invoices: dedupeInvoices(invoices),
     payments,
     maxDate: maxDateFromLines(lines)
   };
+}
+
+function parseLegacyPartySale(lines, index, currentDate) {
+  if (!/\bGST SALES\b/i.test(lines[index])) return null;
+  const inline = String(lines[index] || "").match(/\bGST SALES\b.*?\bSales\s+([A-Z]?\d+[A-Z]?)\s+(\d[\d,]*\.\d{2,3})/i);
+  if (inline) {
+    const date = parseDate(lines[index]) || currentDate;
+    return {
+      ref: inline[1],
+      key: invoiceKey(inline[1], date),
+      date,
+      amount: parseAmount(inline[2]),
+      source: lines[index]
+    };
+  }
+  const amount = firstAmount(lines[index]) || firstAmount(lines[index + 1] || "") || lastAmount(lines[index + 1] || "");
+  if (!amount) return null;
+  let ref = "";
+  for (let j = index + 1; j < Math.min(lines.length, index + 5); j += 1) {
+    const candidate = String(lines[j] || "").trim();
+    if (/^\d+[A-Z]?$/i.test(candidate)) {
+      ref = candidate;
+      break;
+    }
+  }
+  if (!ref) return null;
+  return {
+    ref,
+    key: invoiceKey(ref, currentDate),
+    date: currentDate,
+    amount,
+    source: lines.slice(index, Math.min(lines.length, index + 4)).join(" ")
+  };
+}
+
+function extractBalanceHistory(lines, period = {}) {
+  const history = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!/Closing Balance/i.test(lines[i])) continue;
+    const amount = firstAmount(lines[i]) || lastAmount(lines[i]) || firstAmount(lines[i + 1] || "") || lastAmount(lines[i + 1] || "");
+    if (!amount) continue;
+    let date = "";
+    for (let j = i + 1; j < Math.min(lines.length, i + 20); j += 1) {
+      if (!/Opening Balance/i.test(lines[j])) continue;
+      const nextOpeningDate = parseDate(lines[j]);
+      if (nextOpeningDate) date = formatDate(addDays(parseDdMmYy(nextOpeningDate), -1));
+      break;
+    }
+    if (!date) date = history.length === 0 && period.startDate && period.endDate ? period.endDate : period.endDate || maxDateFromLines(lines);
+    history.push({ date, amount });
+  }
+  return history;
+}
+
+function addDays(date, days) {
+  const next = new Date(date.getTime());
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function formatDate(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+  return `${String(date.getDate()).padStart(2, "0")}.${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getFullYear()).slice(-2)}`;
 }
 
 function extractHeaderInvoiceRef(line) {
@@ -784,7 +966,7 @@ function parseOdooPartnerLedger(lines, suppliedPartyName = "") {
 
 
 function firstAmount(line) {
-  const match = String(line || "").match(/(\d[\d, ]*\.\d{2})/);
+  const match = String(line || "").match(/(\d[\d, ]*\.\d{2,3})/);
   return match ? parseAmount(match[1]) : 0;
 }
 
@@ -852,6 +1034,7 @@ function combinePartyLedgers(parties) {
     partyName: [...new Set(parties.map((p) => p.partyName).filter(Boolean))].join(", ") || "PARTY",
     openingBalance: parties.reduce((sum, p) => sum + p.openingBalance, 0),
     closingBalance: parties.reduce((sum, p) => sum + p.closingBalance, 0),
+    balanceHistory: combineBalanceHistory(parties),
     tdsTotal: parties.reduce((sum, p) => sum + p.tdsTotal, 0),
     invoices,
     payments: parties.flatMap((p) => p.payments || []),
@@ -859,7 +1042,45 @@ function combinePartyLedgers(parties) {
   };
 }
 
+function combineBalanceHistory(parties) {
+  const byDate = new Map();
+  for (const party of parties) {
+    for (const balance of party.balanceHistory || []) {
+      if (!balance.date) continue;
+      byDate.set(balance.date, round2((byDate.get(balance.date) || 0) + Number(balance.amount || 0)));
+    }
+  }
+  return [...byDate.entries()]
+    .map(([date, amount]) => ({ date, amount }))
+    .sort((a, b) => parseDdMmYy(a.date) - parseDdMmYy(b.date));
+}
+
+function applyCompanyPeriodToParty(company, party) {
+  const cutoff = company.period?.endDate || "";
+  if (!cutoff) return party;
+  const cutoffDate = parseDdMmYy(cutoff);
+  if (cutoffDate.getTime() <= 0) return party;
+
+  const withinCutoff = (item) => {
+    if (!item.date) return true;
+    return parseDdMmYy(item.date) <= cutoffDate;
+  };
+
+  const balanceAtCutoff = [...(party.balanceHistory || [])]
+    .filter((balance) => balance.date && parseDdMmYy(balance.date) <= cutoffDate)
+    .sort((a, b) => parseDdMmYy(b.date) - parseDdMmYy(a.date))[0];
+
+  return {
+    ...party,
+    invoices: (party.invoices || []).filter(withinCutoff),
+    payments: (party.payments || []).filter(withinCutoff),
+    closingBalance: balanceAtCutoff?.amount || party.closingBalance,
+    effectivePeriodEnd: cutoff
+  };
+}
+
 function reconcile(company, party) {
+  party = applyCompanyPeriodToParty(company, party);
   const companyInvoices = company.invoices.map((invoice, index) => ({ ...invoice, rowId: `C${index}` }));
   const partyInvoices = party.invoices.map((invoice, index) => ({ ...invoice, rowId: `P${index}` }));
   const companyByRef = new Map(companyInvoices.map((invoice) => [invoice.key, invoice]));
@@ -903,7 +1124,7 @@ function reconcile(company, party) {
   const debitTotal = round2(debitNotes.reduce((sum, item) => sum + item.amount, 0));
   const addTotal = round2(addRows.reduce((sum, invoice) => sum + invoice.amount, 0));
   const lessTotal = round2(lessInvoices.reduce((sum, invoice) => sum + invoice.amount, 0));
-  const openingDiff = round2(company.openingBalance - party.openingBalance);
+  const openingDiff = round2(party.openingBalance - company.openingBalance);
   const roundOff = round2(party.closingBalance % 1 ? Math.ceil(party.closingBalance) - party.closingBalance : 0);
   const companyClosing = isOdooStatement
     ? round2(party.closingBalance - openingDiff - tdsNotBooked - debitTotal - addTotal + lessTotal + roundOff)
@@ -955,6 +1176,19 @@ function matchInvoices(companyInvoices, partyInvoices, party) {
       const companyInvoice = companyInvoices.find((invoice) => invoice.key === partyInvoice.key && !companyIds.has(invoice.rowId));
       if (companyInvoice) {
         companyIds.add(companyInvoice.rowId);
+        partyIds.add(partyInvoice.rowId);
+      }
+    }
+    for (const partyInvoice of partyInvoices) {
+      if (partyIds.has(partyInvoice.rowId)) continue;
+      const candidates = companyInvoices.filter(
+        (companyInvoice) =>
+          !companyIds.has(companyInvoice.rowId) &&
+          invoiceAmountsCompatible(companyInvoice, partyInvoice) &&
+          invoiceDatesCompatible(companyInvoice, partyInvoice)
+      );
+      if (candidates.length === 1) {
+        companyIds.add(candidates[0].rowId);
         partyIds.add(partyInvoice.rowId);
       }
     }
@@ -1081,8 +1315,8 @@ async function writeReconciliationWorkbook(templatePath, outputPath, reco) {
   }
 
   sheet.getCell("G7").value = reco.company.closingBalance;
-  sheet.getCell("G10").value = -Math.abs(reco.company.openingBalance);
-  sheet.getCell("G11").value = -Math.abs(reco.party.openingBalance);
+  sheet.getCell("G10").value = Math.abs(reco.company.openingBalance);
+  sheet.getCell("G11").value = Math.abs(reco.party.openingBalance);
   sheet.getCell("G16").value = reco.summary.tdsNotBooked;
   sheet.getCell("H62").value = reco.party.closingBalance;
 
