@@ -288,11 +288,29 @@ function normaliseRef(ref) {
     .replace(/[\s,]+/g, "")
     .replace(/^NO[.-]?/i, "")
     .replace(/[.;:]+$/g, "");
+  value = normaliseAlphaNumericInvoiceRef(value);
   value = value.replace(/\(R\)$/i, "");
   value = value.replace(/^(INV\/\d{4}-\d{2}\/)0+(\d+)$/i, "$1$2");
   if (/^G\d+[A-Z]$/i.test(value)) value = value.replace(/[A-Z]$/i, "");
   value = value.replace(/\/0+(\d+)$/g, "/$1");
   return value;
+}
+
+function normaliseAlphaNumericInvoiceRef(value) {
+  const simple = String(value || "").match(/^([A-Z])([0-9OILS]+)(?:\([A-Z]\))?$/i);
+  if (simple) {
+    return `${simple[1]}${ocrDigits(simple[2])}`;
+  }
+  const match = String(value || "").match(/^([A-Z]{1,3})([0-9OILS]+)(?:\([A-Z]\))?$/i);
+  if (!match) return value;
+  return `${match[1]}${ocrDigits(match[2])}`;
+}
+
+function ocrDigits(value) {
+  return String(value || "")
+    .replace(/O/g, "0")
+    .replace(/[IL]/g, "1")
+    .replace(/S/g, "5");
 }
 
 function parseAmount(raw) {
@@ -325,7 +343,7 @@ function parseDate(line) {
   }
 
   const numeric =
-    text.match(/\b(?:DATE|DT)[: -]*(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\b/i) ||
+    text.match(/\b(?:DATE|DT)[: -]*(\d{1,2})[-/.](\d{1,2})\s*[-/.]\s*(\d{2,4})\b/i) ||
     text.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
   if (!numeric) return "";
   const [, dd, mm, yy] = numeric;
@@ -335,7 +353,7 @@ function parseDate(line) {
 
 function parseDocumentDate(line) {
   const text = String(line || "");
-  const numeric = text.match(/\b(?:DATE|DT)[: -]*(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\b/i);
+  const numeric = text.match(/\b(?:DATE|DT)[: -]*(\d{1,2})[-/.](\d{1,2})\s*[-/.]\s*(\d{2,4})\b/i);
   if (!numeric) return "";
   const [, dd, mm, yy] = numeric;
   if (Number(mm) < 1 || Number(mm) > 12) return "";
@@ -407,11 +425,22 @@ function parseCompanyLedgerLines(allLines) {
   const closingLine = [...lines].reverse().find((line) => /To\s+Closing Balance/i.test(line)) || "";
   const blocks = [];
   const payments = [];
+  const adjustments = [];
   let tdsTotal = 0;
   let currentDate = "";
 
   for (let i = 0; i < lines.length; i += 1) {
     currentDate = parseDate(lines[i]) || currentDate;
+    if (/SUNDRY BALANCE WRIT/i.test(lines[i])) {
+      adjustments.push({
+        ref: "",
+        key: `adjustment-${i}`,
+        date: currentDate,
+        amount: lastAmount(lines[i]),
+        description: "SUNDRY BALANCE WRITTEN OFF - NET",
+        source: lines[i]
+      });
+    }
     if (/\bBANK PAYMENT\b/i.test(lines[i])) {
       payments.push({
         ref: extractPaymentRef(lines[i]) || "",
@@ -455,7 +484,8 @@ function parseCompanyLedgerLines(allLines) {
     closingBalance: lastAmount(closingLine),
     tdsTotal,
     invoices: dedupeInvoices(blocks),
-    payments
+    payments,
+    adjustments
   };
 }
 
@@ -636,7 +666,7 @@ function parseAccountStatementPartyLedger(lines, suppliedPartyName = "") {
     if (/\b(?:BRct|Receipt)\b/i.test(line)) {
       const amount = firstAmount(line);
       const paymentDate = parseDate(line) || lastDate;
-      if (amount > 0 && isWithinFy2526(paymentDate)) {
+      if (amount > 0) {
         payments.push({
           ref: "",
           key: `${paymentDate}-${amount}-${payments.length}`,
@@ -649,7 +679,7 @@ function parseAccountStatementPartyLedger(lines, suppliedPartyName = "") {
 
     if (/\bJrnl\b/i.test(line) && /Tds|TDS|Dedcted|Deducted/i.test(`${line} ${lines[i + 1] || ""}`)) {
       const amount = firstAmount(line);
-      if (amount > 0 && isWithinFy2526(parseDate(line) || lastDate)) tdsTotal += amount;
+      if (amount > 0) tdsTotal += amount;
     }
 
     const sale = line.match(/([\d, ]+\.\d{2})\s+(\d{1,2})\/(\d{1,2})\/(\d{4})\s+Sale\b/i);
@@ -659,7 +689,7 @@ function parseAccountStatementPartyLedger(lines, suppliedPartyName = "") {
         date: `${sale[2].padStart(2, "0")}.${sale[3].padStart(2, "0")}.${sale[4].slice(-2)}`,
         source: line
       };
-      if (pendingBill && isWithinFy2526(lastSale.date)) {
+      if (pendingBill) {
         invoices.push({
           ref: pendingBill,
           key: normaliseRef(pendingBill),
@@ -673,8 +703,8 @@ function parseAccountStatementPartyLedger(lines, suppliedPartyName = "") {
       continue;
     }
 
-    const bill = line.match(/\bBill No\s+([A-Z][A-Z0-9]*)\b/i);
-    if (bill && lastSale && isWithinFy2526(lastSale.date)) {
+    const bill = line.match(/\bBill No\s+([A-Z][A-Z0-9ILS]*)\b/i);
+    if (bill && lastSale) {
       invoices.push({
         ref: bill[1].toUpperCase(),
         key: normaliseRef(bill[1]),
@@ -701,7 +731,7 @@ function parseAccountStatementPartyLedger(lines, suppliedPartyName = "") {
     openingBalance,
     closingBalance,
     tdsTotal,
-    invoices: dedupeInvoices(invoices),
+    invoices,
     payments,
     maxDate: lastDate
   };
@@ -823,6 +853,9 @@ function dedupeInvoices(invoices) {
 
 function combinePartyLedgers(parties) {
   const ledgerTypes = [...new Set(parties.map((p) => p.ledgerType).filter(Boolean))];
+  const invoices = ledgerTypes.length === 1 && ledgerTypes[0] === "party-statement"
+    ? parties.flatMap((p) => p.invoices)
+    : dedupeInvoices(parties.flatMap((p) => p.invoices));
   return {
     ledgerType: ledgerTypes.length === 1 ? ledgerTypes[0] : "party-mixed",
     ledgerTypes,
@@ -830,21 +863,24 @@ function combinePartyLedgers(parties) {
     openingBalance: parties.reduce((sum, p) => sum + p.openingBalance, 0),
     closingBalance: parties.reduce((sum, p) => sum + p.closingBalance, 0),
     tdsTotal: parties.reduce((sum, p) => sum + p.tdsTotal, 0),
-    invoices: dedupeInvoices(parties.flatMap((p) => p.invoices)),
+    invoices,
     payments: parties.flatMap((p) => p.payments || []),
     maxDate: parties.map((p) => p.maxDate).filter(Boolean).sort((a, b) => parseDdMmYy(b) - parseDdMmYy(a))[0] || ""
   };
 }
 
 function reconcile(company, party) {
-  const companyByRef = new Map(company.invoices.map((invoice) => [invoice.key, invoice]));
-  const partyByRef = new Map(party.invoices.map((invoice) => [invoice.key, invoice]));
+  const companyInvoices = company.invoices.map((invoice, index) => ({ ...invoice, rowId: `C${index}` }));
+  const partyInvoices = party.invoices.map((invoice, index) => ({ ...invoice, rowId: `P${index}` }));
+  const companyByRef = new Map(companyInvoices.map((invoice) => [invoice.key, invoice]));
+  const partyByRef = new Map(partyInvoices.map((invoice) => [invoice.key, invoice]));
   const isOdooStatement = party.ledgerType === "party-odoo";
+  const matched = matchInvoices(companyInvoices, partyInvoices, party);
 
-  const addInvoices = party.invoices
+  const addInvoices = partyInvoices
     .filter((invoice) => {
       const companyInvoice = companyByRef.get(invoice.key);
-      return !companyInvoice || (isOdooStatement && isYearEndProvision(companyInvoice));
+      return !matched.partyIds.has(invoice.rowId) || (isOdooStatement && companyInvoice && isYearEndProvision(companyInvoice));
     })
     .map((invoice) => ({
       ...invoice,
@@ -857,9 +893,9 @@ function reconcile(company, party) {
     description: "PAYMENT NOT BOOK"
   }));
 
-  const lessInvoices = company.invoices
+  const lessInvoices = companyInvoices
     .filter((invoice) => {
-      if (partyByRef.has(invoice.key)) return false;
+      if (matched.companyIds.has(invoice.rowId)) return false;
       if (!isOdooStatement) return true;
       if (!isWithinFy2526(invoice.postingDate || invoice.date)) return false;
       return !isYearEndProvision(invoice);
@@ -872,7 +908,8 @@ function reconcile(company, party) {
   let tdsNotBooked = isOdooStatement
     ? calculateGrossNetTds(companyByRef, party.invoices, addKeys)
     : Math.max(0, round2(company.tdsTotal - lessTds - party.tdsTotal));
-  const addRows = [...addInvoices];
+  const adjustmentRows = party.ledgerType === "party-statement" ? company.adjustments || [] : [];
+  const addRows = [...adjustmentRows, ...addInvoices];
   const debitTotal = round2(debitNotes.reduce((sum, item) => sum + item.amount, 0));
   const addTotal = round2(addRows.reduce((sum, invoice) => sum + invoice.amount, 0));
   const lessTotal = round2(lessInvoices.reduce((sum, invoice) => sum + invoice.amount, 0));
@@ -887,6 +924,13 @@ function reconcile(company, party) {
   if (!isOdooStatement && tdsCorrection > 0 && tdsCorrection <= 10000) {
     tdsNotBooked = round2(tdsNotBooked + tdsCorrection);
     computed = round2(companyClosing + openingDiff + tdsNotBooked + debitTotal + addTotal - lessTotal - roundOff);
+  }
+  if (party.ledgerType === "party-statement") {
+    const reverseTdsCorrection = round2(party.closingBalance - computed);
+    if (reverseTdsCorrection < 0 && Math.abs(reverseTdsCorrection) <= 2000 && tdsNotBooked + reverseTdsCorrection >= 0) {
+      tdsNotBooked = round2(tdsNotBooked + reverseTdsCorrection);
+      computed = round2(companyClosing + openingDiff + tdsNotBooked + debitTotal + addTotal - lessTotal - roundOff);
+    }
   }
   const h63 = round2(computed - party.closingBalance);
 
@@ -918,6 +962,67 @@ function reconcile(company, party) {
       h63
     }
   };
+}
+
+function matchInvoices(companyInvoices, partyInvoices, party) {
+  if (party.ledgerType !== "party-statement") {
+    const companyIds = new Set();
+    const partyIds = new Set();
+    for (const partyInvoice of partyInvoices) {
+      const companyInvoice = companyInvoices.find((invoice) => invoice.key === partyInvoice.key && !companyIds.has(invoice.rowId));
+      if (companyInvoice) {
+        companyIds.add(companyInvoice.rowId);
+        partyIds.add(partyInvoice.rowId);
+      }
+    }
+    return {
+      companyIds,
+      partyIds
+    };
+  }
+
+  const companyIds = new Set();
+  const partyIds = new Set();
+
+  for (const partyInvoice of partyInvoices) {
+    const candidates = companyInvoices.filter((companyInvoice) => companyInvoice.key === partyInvoice.key);
+    const companyInvoice = candidates.find((candidate) => !companyIds.has(candidate.rowId) && invoiceAmountsCompatible(candidate, partyInvoice));
+    if (companyInvoice) {
+      companyIds.add(companyInvoice.rowId);
+      partyIds.add(partyInvoice.rowId);
+    }
+  }
+
+  for (const partyInvoice of partyInvoices) {
+    if (partyIds.has(partyInvoice.rowId)) continue;
+    const candidates = companyInvoices.filter(
+      (companyInvoice) =>
+        !companyIds.has(companyInvoice.rowId) &&
+        invoiceAmountsCompatible(companyInvoice, partyInvoice) &&
+        invoiceDatesCompatible(companyInvoice, partyInvoice)
+    );
+    if (candidates.length === 1) {
+      companyIds.add(candidates[0].rowId);
+      partyIds.add(partyInvoice.rowId);
+    }
+  }
+
+  return { companyIds, partyIds };
+}
+
+function invoiceAmountsCompatible(companyInvoice, partyInvoice) {
+  const partyAmount = Number(partyInvoice.amount || 0);
+  const companyNet = Number(companyInvoice.amount || 0);
+  const companyGross = round2(companyNet + Number(companyInvoice.tds || 0));
+  return Math.abs(partyAmount - companyNet) <= 1 || Math.abs(partyAmount - companyGross) <= 1;
+}
+
+function invoiceDatesCompatible(companyInvoice, partyInvoice) {
+  if (!companyInvoice.date || !partyInvoice.date) return true;
+  const companyDate = parseDdMmYy(companyInvoice.date);
+  const partyDate = parseDdMmYy(partyInvoice.date);
+  const days = Math.abs(companyDate - partyDate) / 86400000;
+  return days <= 45;
 }
 
 function findCompanyPaymentsNotInParty(companyPayments, partyPayments, party = {}) {
