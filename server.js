@@ -431,16 +431,6 @@ function parseCompanyLedgerLines(allLines) {
 
   for (let i = 0; i < lines.length; i += 1) {
     currentDate = parseDate(lines[i]) || currentDate;
-    if (/SUNDRY BALANCE WRIT/i.test(lines[i])) {
-      adjustments.push({
-        ref: "",
-        key: `adjustment-${i}`,
-        date: currentDate,
-        amount: lastAmount(lines[i]),
-        description: "SUNDRY BALANCE WRITTEN OFF - NET",
-        source: lines[i]
-      });
-    }
     if (/\bBANK PAYMENT\b/i.test(lines[i])) {
       payments.push({
         ref: extractPaymentRef(lines[i]) || "",
@@ -924,13 +914,6 @@ function reconcile(company, party) {
   if (!isOdooStatement && tdsCorrection > 0 && tdsCorrection <= 10000) {
     tdsNotBooked = round2(tdsNotBooked + tdsCorrection);
     computed = round2(companyClosing + openingDiff + tdsNotBooked + debitTotal + addTotal - lessTotal - roundOff);
-  }
-  if (party.ledgerType === "party-statement") {
-    const reverseTdsCorrection = round2(party.closingBalance - computed);
-    if (reverseTdsCorrection < 0 && Math.abs(reverseTdsCorrection) <= 2000 && tdsNotBooked + reverseTdsCorrection >= 0) {
-      tdsNotBooked = round2(tdsNotBooked + reverseTdsCorrection);
-      computed = round2(companyClosing + openingDiff + tdsNotBooked + debitTotal + addTotal - lessTotal - roundOff);
-    }
   }
   const h63 = round2(computed - party.closingBalance);
 
