@@ -1,0 +1,15 @@
+node_modules/
+server.err.log
+server.out.log
+npm-debug.log*
+
+data/uploads/
+data/outputs/
+!data/templates/
+!data/templates/ledger-reconciliation-template.xlsx
+
+*.xlsx
+!data/templates/ledger-reconciliation-template.xlsx
+
+*.tmp
+~$*

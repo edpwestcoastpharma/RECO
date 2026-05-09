@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ledger Reconciliation</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <h1>Ledger Reconciliation</h1>
+            <p>Company ledger, party ledger and Excel template processing</p>
+          </div>
+          <div class="status-pill" id="serverStatus">Ready</div>
+        </header>
+
+        <form id="reconcileForm" class="panel">
+          <div class="field-grid">
+            <label class="field">
+              <span>Company ledger PDF</span>
+              <input name="companyLedger" type="file" accept="application/pdf,.pdf" required />
+            </label>
+
+            <label class="field">
+              <span>Party ledger PDF files</span>
+              <input name="partyLedgers" type="file" accept="application/pdf,.pdf" multiple required />
+            </label>
+
+            <label class="field">
+              <span>Excel reconciliation template, first time only</span>
+              <input
+                name="template"
+                type="file"
+                accept="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx"
+              />
+            </label>
+
+            <label class="field">
+              <span>Party name override</span>
+              <input name="partyName" type="text" placeholder="Optional" />
+            </label>
+          </div>
+
+          <div class="actions">
+            <button id="submitButton" type="submit">Run reconciliation</button>
+            <span class="hint">Excel template is saved once and reused automatically.</span>
+          </div>
+        </form>
+
+        <section class="panel result-panel" id="resultPanel" hidden>
+          <div class="progress-row">
+            <div>
+              <h2 id="jobTitle">Processing</h2>
+              <p id="jobMessage">Starting...</p>
+            </div>
+            <strong id="progressText">0%</strong>
+          </div>
+          <div class="progress">
+            <div id="progressBar"></div>
+          </div>
+
+          <div class="summary" id="summary" hidden>
+            <div>
+              <span>Company closing</span>
+              <strong id="companyClosing">0</strong>
+            </div>
+            <div>
+              <span>Opening difference</span>
+              <strong id="openingDiff">0</strong>
+            </div>
+            <div>
+              <span>TDS</span>
+              <strong id="tdsNotBooked">0</strong>
+            </div>
+            <div>
+              <span>ADD total</span>
+              <strong id="addTotal">0</strong>
+            </div>
+            <div>
+              <span>LESS total</span>
+              <strong id="lessTotal">0</strong>
+            </div>
+            <div>
+              <span>Party closing</span>
+              <strong id="partyClosing">0</strong>
+            </div>
+            <div>
+              <span>H63</span>
+              <strong id="h63">0</strong>
+            </div>
+          </div>
+
+          <p class="verification" id="verificationText"></p>
+
+          <div class="actions" id="downloadActions" hidden>
+            <a class="button-link" id="downloadLink" href="#">Download Excel</a>
+            <a class="button-link secondary" id="reportLink" href="#">Download report</a>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

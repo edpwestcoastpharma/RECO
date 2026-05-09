@@ -1,0 +1,16 @@
+{
+  "name": "ledger-reconciliation-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "multer": "^2.0.2",
+    "pdf-parse": "^1.1.1"
+  }
+}
