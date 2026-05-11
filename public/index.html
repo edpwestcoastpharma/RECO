@@ -137,6 +137,19 @@
             <a class="button-link" id="downloadLink" href="#">Download Excel</a>
             <a class="button-link secondary" id="reportLink" href="#">Download report</a>
           </div>
+
+          <section class="excel-preview-card" id="excelPreviewPanel" hidden>
+            <div class="review-header">
+              <div>
+                <h2>Final Excel sheet preview</h2>
+                <p id="excelPreviewMeta">Generated workbook</p>
+              </div>
+              <button class="tab-button" type="button" id="refreshPreviewButton">Refresh preview</button>
+            </div>
+            <div class="excel-preview-wrap">
+              <table class="excel-preview" id="excelPreviewTable"></table>
+            </div>
+          </section>
         </section>
       </section>
     </main>

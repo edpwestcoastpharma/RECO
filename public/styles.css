@@ -350,6 +350,91 @@ button:disabled {
   font-weight: 800;
 }
 
+.excel-preview-card {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+}
+
+.excel-preview-card p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.excel-preview-wrap {
+  max-height: 620px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+
+.excel-preview {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+}
+
+.excel-preview th,
+.excel-preview td {
+  min-width: 96px;
+  max-width: 220px;
+  height: 30px;
+  padding: 6px 8px;
+  border: 1px solid #d9dfdb;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.excel-preview .excel-corner,
+.excel-preview .excel-row-head,
+.excel-preview .excel-col-head {
+  position: sticky;
+  z-index: 2;
+  background: #eef4f0;
+  color: #52625d;
+  font-weight: 800;
+  text-align: center;
+}
+
+.excel-preview .excel-corner {
+  top: 0;
+  left: 0;
+  z-index: 4;
+  min-width: 44px;
+  width: 44px;
+}
+
+.excel-preview .excel-col-head {
+  top: 0;
+}
+
+.excel-preview .excel-row-head {
+  left: 0;
+  min-width: 44px;
+  width: 44px;
+}
+
+.excel-cell.type-number,
+.excel-cell.type-formula {
+  text-align: right;
+}
+
+.excel-cell.type-formula {
+  color: #315d86;
+}
+
+.excel-cell.is-bold {
+  font-weight: 800;
+}
+
 .is-warning {
   color: var(--warn);
 }

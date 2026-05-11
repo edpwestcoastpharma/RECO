@@ -21,7 +21,7 @@ http://localhost:3030
 - Upload one or many party ledger PDFs.
 - Upload the Excel template once; after that the app reuses `data/templates/ledger-reconciliation-template.xlsx`.
 - The app preserves the template structure and writes reconciliation rows into the workbook.
-- Review diagnostics, ADD/LESS/PAYMENT/ADJUSTMENT rows, and repair suggestions before downloading Excel.
+- Review diagnostics, ADD/LESS/PAYMENT/ADJUSTMENT rows, repair suggestions, and the generated Excel sheet before downloading Excel.
 
 ## Supported Ledger Types
 
@@ -41,6 +41,7 @@ Every job includes:
 - parser diagnostics: detected ledger types, periods, counts, duplicate keys, warnings
 - review rows: ADD, LESS, PAYMENT, and company adjustment previews
 - rule-based repair: required ADD total, current ADD total, H63 gap, and likely next checks
+- final Excel preview: browser grid rendered from the generated `.xlsx` output
 - company rule library: supported West Coast ledger patterns and safety rules
 
 `H63 = 0` means the itemized rows and allowed source-ledger adjustments explain the balance. If the app shows `NEEDS_REVIEW`, do not use the Excel as final until the mismatch is traced to real ledger rows.

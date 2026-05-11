@@ -107,6 +107,16 @@ app.get("/api/jobs/:id/report", (req, res) => {
   res.download(job.reportPath, path.basename(job.reportPath));
 });
 
+app.get("/api/jobs/:id/preview", async (req, res) => {
+  try {
+    const job = jobs.get(req.params.id);
+    if (!job?.outputPath) return res.status(404).json({ error: "Output not ready" });
+    res.json(await buildWorkbookPreview(job.outputPath));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 if (process.env.RECO_NO_SERVER !== "1") {
   app.listen(PORT, () => {
     console.log(`Ledger reconciliation app running at http://localhost:${PORT}`);
@@ -1574,6 +1584,81 @@ async function writeReconciliationWorkbook(templatePath, outputPath, reco) {
   sheet.getCell(`H${differenceRow}`).value = { formula: `H${balanceRow}-H${partyClosingRow}` };
 
   await workbook.xlsx.writeFile(outputPath);
+}
+
+async function buildWorkbookPreview(outputPath) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(outputPath);
+  const sheet = workbook.worksheets[0];
+  const maxColumn = Math.min(Math.max(sheet.actualColumnCount || 8, 8), 10);
+  const maxRow = Math.min(Math.max(sheet.actualRowCount || 63, 63), 120);
+  const columns = Array.from({ length: maxColumn }, (_, index) => columnLetter(index + 1));
+  const rows = [];
+
+  for (let rowNumber = 1; rowNumber <= maxRow; rowNumber += 1) {
+    const row = sheet.getRow(rowNumber);
+    const cells = columns.map((column, index) => {
+      const cell = row.getCell(index + 1);
+      return {
+        address: `${column}${rowNumber}`,
+        value: previewCellValue(cell.value),
+        type: previewCellType(cell.value),
+        bold: Boolean(cell.font?.bold),
+        fill: previewFill(cell),
+        align: cell.alignment?.horizontal || "",
+        numFmt: cell.numFmt || ""
+      };
+    });
+
+    rows.push({
+      number: rowNumber,
+      height: row.height || null,
+      cells
+    });
+  }
+
+  return {
+    sheetName: sheet.name,
+    columns,
+    rows,
+    truncated: sheet.actualRowCount > maxRow || sheet.actualColumnCount > maxColumn
+  };
+}
+
+function previewCellValue(value) {
+  if (value == null) return "";
+  if (typeof value === "object") {
+    if (value.formula) return `=${value.formula}`;
+    if (value.result != null) return previewCellValue(value.result);
+    if (value.richText) return value.richText.map((item) => item.text || "").join("");
+    if (value.text) return value.text;
+    if (value.hyperlink) return value.text || value.hyperlink;
+    if (value instanceof Date) return value.toLocaleDateString("en-IN");
+  }
+  return value;
+}
+
+function previewCellType(value) {
+  if (value == null) return "blank";
+  if (typeof value === "number") return "number";
+  if (typeof value === "object" && value.formula) return "formula";
+  return "text";
+}
+
+function previewFill(cell) {
+  const color = cell.fill?.fgColor?.argb || cell.fill?.bgColor?.argb || "";
+  return color && color !== "00000000" ? `#${color.slice(-6)}` : "";
+}
+
+function columnLetter(number) {
+  let result = "";
+  let current = number;
+  while (current > 0) {
+    const remainder = (current - 1) % 26;
+    result = String.fromCharCode(65 + remainder) + result;
+    current = Math.floor((current - 1) / 26);
+  }
+  return result;
 }
 
 function fillSection(sheet, startRow, formulaRow, invoices) {

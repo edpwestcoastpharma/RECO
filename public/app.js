@@ -18,8 +18,13 @@ const repairList = document.querySelector("#repairList");
 const reviewRows = document.querySelector("#reviewRows");
 const reviewStatus = document.querySelector("#reviewStatus");
 const tabButtons = [...document.querySelectorAll("[data-review-tab]")];
+const excelPreviewPanel = document.querySelector("#excelPreviewPanel");
+const excelPreviewMeta = document.querySelector("#excelPreviewMeta");
+const excelPreviewTable = document.querySelector("#excelPreviewTable");
+const refreshPreviewButton = document.querySelector("#refreshPreviewButton");
 let lastReview = null;
 let activeReviewTab = "addRows";
+let lastJobId = null;
 
 const fields = {
   companyClosing: document.querySelector("#companyClosing"),
@@ -39,7 +44,9 @@ form.addEventListener("submit", async (event) => {
   summary.hidden = true;
   reviewPanel.hidden = true;
   rowReviewPanel.hidden = true;
+  excelPreviewPanel.hidden = true;
   downloadActions.hidden = true;
+  excelPreviewTable.innerHTML = "";
   setProgress(2, "Uploading files", "Please keep this tab open.");
 
   try {
@@ -74,9 +81,11 @@ async function pollJob(jobId) {
       submitButton.disabled = false;
       serverStatus.textContent = job.status === "completed" ? "Done" : job.status === "failed" ? "Error" : "Review";
       if (job.status !== "failed") {
+        lastJobId = jobId;
         downloadLink.href = `/api/jobs/${jobId}/download`;
         reportLink.href = `/api/jobs/${jobId}/report`;
         downloadActions.hidden = false;
+        loadExcelPreview(jobId);
       }
       return;
     }
@@ -95,6 +104,10 @@ tabButtons.forEach((button) => {
     tabButtons.forEach((item) => item.classList.toggle("is-active", item === button));
     renderReviewRows(lastReview);
   });
+});
+
+refreshPreviewButton.addEventListener("click", () => {
+  if (lastJobId) loadExcelPreview(lastJobId);
 });
 
 function setProgress(progress, title, message) {
@@ -163,6 +176,48 @@ function renderReviewRows(review) {
       </tr>`
     )
     .join("");
+}
+
+async function loadExcelPreview(jobId) {
+  excelPreviewPanel.hidden = false;
+  excelPreviewMeta.textContent = "Loading final workbook preview...";
+  try {
+    const response = await fetch(`/api/jobs/${jobId}/preview`);
+    const preview = await response.json();
+    if (!response.ok) throw new Error(preview.error || "Preview not ready");
+    renderExcelPreview(preview);
+  } catch (error) {
+    excelPreviewTable.innerHTML = "";
+    excelPreviewMeta.textContent = `Preview unavailable: ${error.message}`;
+  }
+}
+
+function renderExcelPreview(preview) {
+  const columnHeaders = preview.columns
+    .map((column) => `<th class="excel-col-head">${escapeHtml(column)}</th>`)
+    .join("");
+
+  const body = preview.rows
+    .map((row) => {
+      const cells = row.cells
+        .map((cell) => {
+          const classes = ["excel-cell", `type-${cell.type}`];
+          if (cell.bold) classes.push("is-bold");
+          const style = cell.fill ? ` style="background:${escapeHtml(cell.fill)}"` : "";
+          return `<td class="${classes.join(" ")}"${style}>${escapeHtml(formatPreviewValue(cell))}</td>`;
+        })
+        .join("");
+      return `<tr><th class="excel-row-head">${row.number}</th>${cells}</tr>`;
+    })
+    .join("");
+
+  excelPreviewTable.innerHTML = `<thead><tr><th class="excel-corner"></th>${columnHeaders}</tr></thead><tbody>${body}</tbody>`;
+  excelPreviewMeta.textContent = `${preview.sheetName || "Sheet 1"} - ${preview.rows.length} rows shown${preview.truncated ? " (preview truncated)" : ""}`;
+}
+
+function formatPreviewValue(cell) {
+  if (cell.type === "number") return money(cell.value);
+  return cell.value || "";
 }
 
 function infoLine(label, value) {
