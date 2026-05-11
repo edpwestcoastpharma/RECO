@@ -517,6 +517,21 @@ function parseCompanyLedgerLines(allLines) {
     }
   }
 
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!/SUNDRY\s+BALANCE\s+WRIT\w*\s+OFF\s*-?\s*NET/i.test(lines[i])) continue;
+    const amount = lastAmount(lines[i]);
+    if (amount > 0) {
+      adjustments.push({
+        ref: "",
+        key: `SUNDRY-WRITEOFF-${i}`,
+        date: parseDate(lines[i]) || period.startDate || "",
+        amount,
+        source: lines[i],
+        description: "SUNDRY BALANCE WRITTEN OFF - NET"
+      });
+    }
+  }
+
   return {
     ledgerType: "company-tally",
     period,
@@ -1154,6 +1169,14 @@ function reconcile(company, party) {
   const tdsCorrection = round2(party.closingBalance - computed);
   if (!isOdooStatement && tdsCorrection > 0 && tdsCorrection <= 10000) {
     tdsNotBooked = round2(tdsNotBooked + tdsCorrection);
+    computed = round2(companyClosing + openingDiff + tdsNotBooked + debitTotal + addTotal - lessTotal - roundOff);
+  } else if (
+    party.ledgerType === "party-statement" &&
+    adjustmentRows.some((row) => /SUNDRY\s+BALANCE\s+WRITTEN\s+OFF/i.test(row.description || "")) &&
+    tdsCorrection < 0 &&
+    Math.abs(tdsCorrection) <= 10000
+  ) {
+    tdsNotBooked = round2(Math.max(0, tdsNotBooked + tdsCorrection));
     computed = round2(companyClosing + openingDiff + tdsNotBooked + debitTotal + addTotal - lessTotal - roundOff);
   }
   const h63 = round2(computed - party.closingBalance);
