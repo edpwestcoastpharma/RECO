@@ -95,6 +95,44 @@
 
           <p class="verification" id="verificationText"></p>
 
+          <section class="review-grid" id="reviewPanel" hidden>
+            <div class="review-card">
+              <h2>Parser diagnostics</h2>
+              <div class="diagnostic-list" id="diagnosticList"></div>
+            </div>
+            <div class="review-card">
+              <h2>Rule-based repair</h2>
+              <div class="diagnostic-list" id="repairList"></div>
+            </div>
+          </section>
+
+          <section class="review-card" id="rowReviewPanel" hidden>
+            <div class="review-header">
+              <h2>Review before download</h2>
+              <span id="reviewStatus">-</span>
+            </div>
+            <div class="table-tabs">
+              <button class="tab-button is-active" type="button" data-review-tab="addRows">ADD</button>
+              <button class="tab-button" type="button" data-review-tab="lessRows">LESS</button>
+              <button class="tab-button" type="button" data-review-tab="paymentRows">PAYMENT</button>
+              <button class="tab-button" type="button" data-review-tab="adjustmentRows">ADJUSTMENTS</button>
+            </div>
+            <div class="review-table-wrap">
+              <table class="review-table">
+                <thead>
+                  <tr>
+                    <th>Description</th>
+                    <th>Ref</th>
+                    <th>Date</th>
+                    <th>Amount</th>
+                    <th>Source</th>
+                  </tr>
+                </thead>
+                <tbody id="reviewRows"></tbody>
+              </table>
+            </div>
+          </section>
+
           <div class="actions" id="downloadActions" hidden>
             <a class="button-link" id="downloadLink" href="#">Download Excel</a>
             <a class="button-link secondary" id="reportLink" href="#">Download report</a>

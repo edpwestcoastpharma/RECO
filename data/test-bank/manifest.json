@@ -1,0 +1,50 @@
+{
+  "cases": [
+    {
+      "name": "MESHAYU modern Tally service ledger",
+      "companyLedger": "data/uploads/1778475466413-f0e843ff-4234-4213-847c-0f9fe1cb9799-MESHAYU - WC.pdf",
+      "partyLedgers": [
+        "data/uploads/1778475466420-6afba6c0-1c64-45fb-9bf6-97957f1a31f3-MESHAYU - PARTY.pdf"
+      ],
+      "expect": {
+        "h63": 0,
+        "addTotal": 136273,
+        "lessTotal": 1188,
+        "tdsNotBooked": 5085,
+        "addRows": 5,
+        "lessRows": 1
+      }
+    },
+    {
+      "name": "MANTHAN legacy numeric Tally ledger",
+      "companyLedger": "data/uploads/1778323535054-9c5f0600-100b-461c-8863-f31e79594e4e-MANTHAN PRODUCTS.pdf",
+      "partyLedgers": [
+        "data/uploads/1778323535136-48075b9d-ed42-4a76-b9a1-7147070da565-MANTHAN 21-23.pdf"
+      ],
+      "expect": {
+        "h63": 0,
+        "addTotal": 548114,
+        "lessTotal": 547566,
+        "tdsNotBooked": 21973.34,
+        "addRows": 8,
+        "lessRows": 8
+      }
+    },
+    {
+      "name": "BALAJI multi-PDF statement ledger",
+      "companyLedger": "data/uploads/1778477515982-557269c6-f9ae-454f-b523-03c693296332-BALAJI PACKAGING.pdf",
+      "partyLedgers": [
+        "data/uploads/1778477515993-5d2f60e3-7700-4ec0-9b68-3530b0590072-BALAJI PACKAGING GOTA.pdf",
+        "data/uploads/1778477515986-aadf222d-932b-46a7-a42d-b33ae9e1b445-BALAJI PACKAGING VADA LED.pdf"
+      ],
+      "expect": {
+        "h63": 0,
+        "addTotal": 796582.95,
+        "lessTotal": 0,
+        "tdsNotBooked": 34762.79,
+        "addRows": 17,
+        "lessRows": 0
+      }
+    }
+  ]
+}

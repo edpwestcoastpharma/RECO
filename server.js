@@ -107,9 +107,11 @@ app.get("/api/jobs/:id/report", (req, res) => {
   res.download(job.reportPath, path.basename(job.reportPath));
 });
 
-app.listen(PORT, () => {
-  console.log(`Ledger reconciliation app running at http://localhost:${PORT}`);
-});
+if (process.env.RECO_NO_SERVER !== "1") {
+  app.listen(PORT, () => {
+    console.log(`Ledger reconciliation app running at http://localhost:${PORT}`);
+  });
+}
 
 async function processJob(id, files) {
   setJob(id, { status: "running", progress: 5, message: "Reading ledgers" });
@@ -121,6 +123,7 @@ async function processJob(id, files) {
   setJob(id, { progress: 45, message: "Matching invoices" });
   const combinedParty = combinePartyLedgers(partyResults);
   const reconciliation = reconcile(company, combinedParty);
+  attachAuditLayers(reconciliation);
 
   setJob(id, { progress: 65, message: "Writing Excel template" });
   const outputPath = path.join(OUTPUT_DIR, `RECONCILED-${Date.now()}.xlsx`);
@@ -139,7 +142,11 @@ async function processJob(id, files) {
     outputPath,
     reportPath,
     summary: reconciliation.summary,
-    verification: reconciliation.verification
+    verification: reconciliation.verification,
+    diagnostics: reconciliation.diagnostics,
+    review: reconciliation.review,
+    repair: reconciliation.repair,
+    ruleLibrary: reconciliation.ruleLibrary
   });
 }
 
@@ -176,6 +183,17 @@ async function detectAndParseLedgers(companyFile, partyFiles, partyName) {
     company: parseCompanyLedgerLines(companySource.lines),
     parties: partySources.map((item) => applyPartyFileLabel(parsePartyLedgerLines(item.lines, partyName), item.file.originalname))
   };
+}
+
+export async function reconcileFromFiles({ companyLedger, partyLedgers, partyName = "" }) {
+  const fileFor = (filePath) => ({
+    path: filePath,
+    originalname: path.basename(filePath)
+  });
+  const ledgers = await detectAndParseLedgers(fileFor(companyLedger), partyLedgers.map(fileFor), partyName);
+  const reconciliation = reconcile(ledgers.company, combinePartyLedgers(ledgers.parties));
+  attachAuditLayers(reconciliation);
+  return reconciliation;
 }
 
 function applyPartyFileLabel(party, fileName = "") {
@@ -1210,6 +1228,155 @@ function reconcile(company, party) {
       h63
     }
   };
+}
+
+const WEST_COAST_RULE_LIBRARY = {
+  company: "WEST-COAST PHARMACEUTICAL WORKS LTD",
+  supportedCompanyLedgers: [
+    "Tally SERVICE PURCHASE WITH TDS",
+    "Tally PACKING MATERIAL PURCHASE",
+    "Old Tally Dr (as per details) purchase blocks",
+    "BANK PAYMENT matching by amount",
+    "SUNDRY BALANCE WRITTEN OFF - NET adjustment when present in ledger"
+  ],
+  supportedPartyLedgers: [
+    "Tally Cr (as per details) New Ref invoices",
+    "Old Tally GST SALES Sales invoice tables",
+    "Account Statement For ... Bill No/Sale statements",
+    "Odoo Partner Ledger INV/YYYY-YY references",
+    "Multiple branch PDFs such as GOTA/VADA"
+  ],
+  protectedRegressionCases: ["MESHAYU", "MANTHAN", "BALAJI"],
+  safetyRules: [
+    "Never add a balance-difference row",
+    "Every ADD/LESS row must have source text",
+    "Use H63 = 0 only when itemized rows and permitted ledger adjustments explain the balance",
+    "Preserve older successful party behavior when adding new formats"
+  ]
+};
+
+function attachAuditLayers(reco) {
+  reco.ruleLibrary = WEST_COAST_RULE_LIBRARY;
+  reco.diagnostics = buildDiagnostics(reco);
+  reco.review = buildReview(reco);
+  reco.repair = buildRuleBasedRepair(reco);
+  return reco;
+}
+
+function buildDiagnostics(reco) {
+  const companyDuplicates = duplicateKeys(reco.company.invoices || []);
+  const partyDuplicates = duplicateKeys(reco.party.invoices || []);
+  const parserWarnings = [];
+  if (!reco.company.openingBalance) parserWarnings.push("Company opening balance parsed as zero.");
+  if (!reco.company.closingBalance) parserWarnings.push("Company closing balance parsed as zero.");
+  if (!reco.party.openingBalance && reco.party.ledgerType !== "party-odoo") parserWarnings.push("Party opening balance parsed as zero.");
+  if (!reco.party.closingBalance) parserWarnings.push("Party closing balance parsed as zero.");
+  if ((reco.company.invoices || []).length === 0) parserWarnings.push("No company purchase invoices extracted.");
+  if ((reco.party.invoices || []).length === 0) parserWarnings.push("No party invoices extracted.");
+  if (companyDuplicates.length) parserWarnings.push(`Company duplicate invoice keys found: ${companyDuplicates.slice(0, 6).join(", ")}`);
+  if (partyDuplicates.length) parserWarnings.push(`Party duplicate invoice keys found: ${partyDuplicates.slice(0, 6).join(", ")}`);
+  if (reco.verification.h63 !== 0) parserWarnings.push("H63 is not zero; use rule-based repair suggestions before relying on Excel.");
+
+  return {
+    detected: {
+      partyName: reco.partyName,
+      companyLedgerType: reco.company.ledgerType,
+      partyLedgerType: reco.party.ledgerType,
+      partyLedgerTypes: reco.party.ledgerTypes || [reco.party.ledgerType].filter(Boolean),
+      companyPeriod: reco.company.period || {},
+      partyEffectivePeriodEnd: reco.party.effectivePeriodEnd || reco.party.period?.endDate || ""
+    },
+    counts: {
+      companyInvoices: (reco.company.invoices || []).length,
+      partyInvoices: (reco.party.invoices || []).length,
+      companyPayments: (reco.company.payments || []).length,
+      partyPayments: (reco.party.payments || []).length,
+      addRows: (reco.addInvoices || []).length,
+      lessRows: (reco.lessInvoices || []).length,
+      paymentRows: (reco.debitNotes || []).length,
+      companyAdjustments: (reco.company.adjustments || []).length
+    },
+    balances: {
+      companyOpening: reco.company.openingBalance,
+      partyOpening: reco.party.openingBalance,
+      companyClosing: reco.summary.companyClosing,
+      ledgerCompanyClosing: reco.summary.ledgerCompanyClosing,
+      partyClosing: reco.party.closingBalance,
+      companyTdsTotal: reco.company.tdsTotal,
+      partyTdsTotal: reco.party.tdsTotal
+    },
+    parserWarnings,
+    duplicateKeys: {
+      company: companyDuplicates.slice(0, 25),
+      party: partyDuplicates.slice(0, 25)
+    }
+  };
+}
+
+function buildReview(reco) {
+  return {
+    status: reco.verification.h63 === 0 ? "RECONCILED" : "NEEDS_REVIEW",
+    downloadAdvice:
+      reco.verification.h63 === 0
+        ? "Review rows below, then download Excel."
+        : "Do not use final Excel until the mismatch is explained by source ledger rows.",
+    addRows: previewRows(reco.addInvoices),
+    lessRows: previewRows(reco.lessInvoices),
+    paymentRows: previewRows(reco.debitNotes),
+    adjustmentRows: previewRows(reco.company.adjustments || [])
+  };
+}
+
+function buildRuleBasedRepair(reco) {
+  const requiredAdd = round2(
+    reco.summary.partyClosing -
+      reco.summary.companyClosing -
+      reco.summary.openingDiff -
+      reco.summary.tdsNotBooked -
+      reco.summary.debitTotal +
+      reco.summary.lessTotal +
+      reco.summary.roundOff
+  );
+  const addGap = round2(requiredAdd - reco.summary.addTotal);
+  const suggestions = [];
+  if (reco.verification.h63 === 0) {
+    suggestions.push("H63 is zero. Keep this case in the test bank so future code cannot break it.");
+  } else {
+    suggestions.push(`Required ADD total is ${requiredAdd}; current ADD total is ${reco.summary.addTotal}; gap is ${addGap}.`);
+    if (addGap > 0) suggestions.push("ADD is low. Search party ledger for missing New Ref/Sale/Bill No rows or missed statement branch PDF.");
+    if (addGap < 0) suggestions.push("ADD is high. Re-check ADD rows against company purchase narration, split invoice refs, and gross/net amount matching.");
+    if ((reco.lessInvoices || []).length) suggestions.push("LESS rows exist. Check whether any company invoice ref is truncated, split across pages, or has OCR spacing.");
+    if ((reco.debitNotes || []).length) suggestions.push("Payment rows exist. Check whether party receipt uses a different date but same amount.");
+    if ((reco.company.adjustments || []).length) suggestions.push("Company adjustment rows were found. Confirm they are real ledger rows and not shortcut balancing.");
+  }
+  return {
+    requiredAdd,
+    currentAdd: reco.summary.addTotal,
+    addGap,
+    h63: reco.verification.h63,
+    suggestions
+  };
+}
+
+function previewRows(rows = []) {
+  return rows.slice(0, 50).map((row) => ({
+    description: row.description || "",
+    ref: row.ref || "",
+    key: row.key || "",
+    date: row.date || "",
+    amount: row.amount || 0,
+    source: row.source || "",
+    ledgerLabel: row.ledgerLabel || ""
+  }));
+}
+
+function duplicateKeys(rows = []) {
+  const counts = new Map();
+  for (const row of rows) {
+    if (!row.key) continue;
+    counts.set(row.key, (counts.get(row.key) || 0) + 1);
+  }
+  return [...counts.entries()].filter(([, count]) => count > 1).map(([key]) => key);
 }
 
 function usesLegacyNumericPartyLedger(party) {

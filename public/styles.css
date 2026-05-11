@@ -221,6 +221,135 @@ button:disabled {
   font-size: 14px;
 }
 
+.review-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.review-card {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+}
+
+.review-grid .review-card {
+  margin-top: 0;
+}
+
+.review-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.diagnostic-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.diag-item,
+.diag-warning {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  font-size: 13px;
+}
+
+.diag-item span {
+  display: block;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.diag-item strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.diag-warning {
+  color: var(--warn);
+  border-color: #e4c7a4;
+  background: #fffaf4;
+}
+
+.table-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.tab-button {
+  min-height: 34px;
+  padding: 0 12px;
+  background: #dfe7e2;
+  color: var(--ink);
+}
+
+.tab-button.is-active {
+  background: var(--accent);
+  color: white;
+}
+
+.review-table-wrap {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+
+.review-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.review-table th,
+.review-table td {
+  padding: 9px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.review-table th {
+  position: sticky;
+  top: 0;
+  background: #eef4f0;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.review-table td:nth-child(4) {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.empty-cell {
+  color: var(--muted);
+  text-align: center !important;
+}
+
+.status-ok {
+  color: var(--accent-dark);
+  font-weight: 800;
+}
+
+.status-warn {
+  color: var(--warn);
+  font-weight: 800;
+}
+
 .is-warning {
   color: var(--warn);
 }
@@ -241,7 +370,8 @@ button:disabled {
   }
 
   .field-grid,
-  .summary {
+  .summary,
+  .review-grid {
     grid-template-columns: 1fr;
   }
 }

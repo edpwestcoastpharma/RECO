@@ -11,6 +11,15 @@ const verificationText = document.querySelector("#verificationText");
 const downloadActions = document.querySelector("#downloadActions");
 const downloadLink = document.querySelector("#downloadLink");
 const reportLink = document.querySelector("#reportLink");
+const reviewPanel = document.querySelector("#reviewPanel");
+const rowReviewPanel = document.querySelector("#rowReviewPanel");
+const diagnosticList = document.querySelector("#diagnosticList");
+const repairList = document.querySelector("#repairList");
+const reviewRows = document.querySelector("#reviewRows");
+const reviewStatus = document.querySelector("#reviewStatus");
+const tabButtons = [...document.querySelectorAll("[data-review-tab]")];
+let lastReview = null;
+let activeReviewTab = "addRows";
 
 const fields = {
   companyClosing: document.querySelector("#companyClosing"),
@@ -28,6 +37,8 @@ form.addEventListener("submit", async (event) => {
   serverStatus.textContent = "Uploading";
   resultPanel.hidden = false;
   summary.hidden = true;
+  reviewPanel.hidden = true;
+  rowReviewPanel.hidden = true;
   downloadActions.hidden = true;
   setProgress(2, "Uploading files", "Please keep this tab open.");
 
@@ -57,6 +68,7 @@ async function pollJob(jobId) {
     setProgress(job.progress || 0, titleForStatus(job.status), job.message || "");
 
     if (job.summary) renderSummary(job);
+    if (job.diagnostics || job.review || job.repair) renderReview(job);
 
     if (["completed", "needs_review", "failed"].includes(job.status)) {
       submitButton.disabled = false;
@@ -76,6 +88,14 @@ async function pollJob(jobId) {
     setProgress(100, "Processing stopped", error.message);
   }
 }
+
+tabButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    activeReviewTab = button.dataset.reviewTab;
+    tabButtons.forEach((item) => item.classList.toggle("is-active", item === button));
+    renderReviewRows(lastReview);
+  });
+});
 
 function setProgress(progress, title, message) {
   const safeProgress = Math.max(0, Math.min(100, Number(progress) || 0));
@@ -101,6 +121,54 @@ function renderSummary(job) {
   verificationText.classList.toggle("is-danger", job.status === "failed");
 }
 
+function renderReview(job) {
+  reviewPanel.hidden = false;
+  rowReviewPanel.hidden = false;
+  lastReview = job.review || null;
+  reviewStatus.textContent = job.review?.status || job.status || "-";
+  reviewStatus.className = job.verification?.h63 === 0 ? "status-ok" : "status-warn";
+
+  const diagnostics = job.diagnostics || {};
+  const warnings = diagnostics.parserWarnings?.length ? diagnostics.parserWarnings : ["No parser warnings."];
+  diagnosticList.innerHTML = [
+    infoLine("Company type", diagnostics.detected?.companyLedgerType),
+    infoLine("Party type", diagnostics.detected?.partyLedgerType),
+    infoLine("Company invoices", diagnostics.counts?.companyInvoices),
+    infoLine("Party invoices", diagnostics.counts?.partyInvoices),
+    infoLine("ADD / LESS / PAYMENT", `${diagnostics.counts?.addRows || 0} / ${diagnostics.counts?.lessRows || 0} / ${diagnostics.counts?.paymentRows || 0}`),
+    ...warnings.map((warning) => `<div class="diag-warning">${escapeHtml(warning)}</div>`)
+  ].join("");
+
+  repairList.innerHTML = (job.repair?.suggestions || ["No repair suggestions."]).map((item) => {
+    return `<div class="diag-item">${escapeHtml(item)}</div>`;
+  }).join("");
+
+  renderReviewRows(lastReview);
+}
+
+function renderReviewRows(review) {
+  const rows = review?.[activeReviewTab] || [];
+  if (!rows.length) {
+    reviewRows.innerHTML = `<tr><td colspan="5" class="empty-cell">No rows in this section.</td></tr>`;
+    return;
+  }
+  reviewRows.innerHTML = rows
+    .map(
+      (row) => `<tr>
+        <td>${escapeHtml(row.description || row.ledgerLabel || "")}</td>
+        <td>${escapeHtml(row.ref || "")}</td>
+        <td>${escapeHtml(row.date || "")}</td>
+        <td>${money(row.amount)}</td>
+        <td>${escapeHtml(row.source || "")}</td>
+      </tr>`
+    )
+    .join("");
+}
+
+function infoLine(label, value) {
+  return `<div class="diag-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "-")}</strong></div>`;
+}
+
 function titleForStatus(status) {
   if (status === "completed") return "Reconciled";
   if (status === "needs_review") return "Needs review";
@@ -114,4 +182,13 @@ function money(value) {
     maximumFractionDigits: 2,
     minimumFractionDigits: 2
   }).format(Number(value) || 0);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
