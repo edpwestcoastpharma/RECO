@@ -433,10 +433,10 @@ function extractRefsFromLines(lines) {
     new RegExp(`\\bINVO[A-Z]+\\s+NO[-. ]*[-]?\\s*${refPattern}\\b(?=[\\s,]|$)`, "gi"),
     new RegExp(`\\bNew Ref\\s+${simpleRefPattern}\\b(?=\\s+\\d|\\s+Cr|\\s+Dr|$)`, "gi"),
     new RegExp(`\\bAgst Ref\\s+(?!BP\\b)${simpleRefPattern}\\b(?=\\s+\\d|\\s+Cr|\\s+Dr|$)`, "gi"),
-    /\bNew Ref\s+([A-Z]?\d+[A-Z]?)\b(?=\s+\d|\s+Cr|\s+Dr|$)/gi,
-    /\bAgst Ref\s+(?!BP\b)([A-Z]?\d+[A-Z]?)\b(?=\s+\d|\s+Cr|\s+Dr|$)/gi,
+    /\bNew Ref\s+([A-Z]?\d+[A-Z]?)(?!\s*[-/])\b(?=\s+\d|\s+Cr|\s+Dr|$)/gi,
+    /\bAgst Ref\s+(?!BP\b)([A-Z]?\d+[A-Z]?)(?!\s*[-/])\b(?=\s+\d|\s+Cr|\s+Dr|$)/gi,
     new RegExp(`\\bINVO[A-Z]+\\s+NO\\s*[:.-]?\\s*${simpleRefPattern}\\b`, "gi"),
-    /\b(?:INVO[A-Z]*|BILL)\s+NO\s*[:;'"".-]?\s*([A-Z]?\d+[A-Z]?)\b/gi
+    /\b(?:INVO[A-Z]*|BILL)\s+NO\s*[:;'"".-]?\s*([A-Z]?\d+[A-Z]?)(?!\s*[-/])\b/gi
   ];
 
   for (let i = 0; i < lines.length; i += 1) {
@@ -487,7 +487,7 @@ function parseCompanyLedgerLines(allLines) {
       });
     }
     if (!isCompanyPurchaseHeader(lines[i], lines, i)) continue;
-    const blockLines = [lines[i]];
+    const blockLines = [...modernServiceLookback(lines, i), lines[i]];
     for (let j = i + 1; j < lines.length; j += 1) {
       if (j > i + 1 && isCompanyPurchaseHeader(lines[j], lines, j)) break;
       if (isCompanyVoucherHeader(lines[j])) break;
@@ -495,11 +495,13 @@ function parseCompanyLedgerLines(allLines) {
     }
 
     const refs = extractRefsFromLines(blockLines);
-    const tdsLine = blockLines.find((line) => /\bTDS ON\b/i.test(line)) || "";
+    const headerOffset = blockLines.findIndex((line) => line === lines[i]);
+    const voucherLines = headerOffset >= 0 ? blockLines.slice(headerOffset) : blockLines;
+    const tdsLine = voucherLines.find((line) => /\bTDS ON\b/i.test(line)) || "";
     const tds = lastAmount(tdsLine);
     tdsTotal += tds;
-    const netAmount = companyPurchaseHeaderAmount(blockLines);
-    const postingDate = parseDate(blockLines[0]) || currentDate;
+    const netAmount = companyPurchaseHeaderAmount(blockLines, lines[i]);
+    const postingDate = parseDate(lines[i]) || currentDate;
     const date = parseDocumentDate(blockLines.join(" ")) || postingDate;
 
     for (const ref of pruneDuplicateBlockRefs([...refs.values()])) {
@@ -510,7 +512,7 @@ function parseCompanyLedgerLines(allLines) {
         postingDate,
         amount: netAmount,
         tds,
-        source: blockLines[0]
+        source: lines[i]
       });
     }
   }
@@ -527,12 +529,25 @@ function parseCompanyLedgerLines(allLines) {
   };
 }
 
+function modernServiceLookback(lines, index) {
+  if (!/\bBy\s+\(as per details\).*?\bSERVICE PURCHASE WITH TDS\b/i.test(lines[index])) return [];
+  const lookback = [];
+  for (let j = index - 1; j >= Math.max(0, index - 14); j -= 1) {
+    if (isCompanyVoucherHeader(lines[j]) || /\b(?:BANK PAYMENT|Opening Balance|Closing Balance)\b/i.test(lines[j])) break;
+    if (/^(?:Carried Over|Brought Forward|continued|Date Particulars|WEST-COAST|Page\b)/i.test(lines[j])) continue;
+    lookback.unshift(lines[j]);
+  }
+  return lookback.some((line) => /\bINVO[A-Z]+\s+NO|^\s*(?:R\s*\/\s*)?\d{2}\s*-\s*\d{2}\s*\/\s*0*\d+/i.test(line)) ? lookback : [];
+}
+
 function pruneDuplicateBlockRefs(refs) {
   const keys = new Set(refs.map((ref) => ref.key));
   return refs.filter((ref) => {
     if (!/^\d+$/.test(ref.key)) return true;
     for (const key of keys) {
-      if (key !== ref.key && /^\d+$/.test(key) && key.endsWith(ref.key) && key.length > ref.key.length) return false;
+      if (key === ref.key || key.length <= ref.key.length) continue;
+      if (/^\d+$/.test(key) && key.endsWith(ref.key)) return false;
+      if (key.startsWith(`${ref.key}-`) || key.startsWith(`${ref.key}/`)) return false;
     }
     return true;
   });
@@ -582,8 +597,8 @@ function isCompanyPurchaseHeader(line, lines = [], index = 0) {
   );
 }
 
-function companyPurchaseHeaderAmount(blockLines) {
-  const headerAmount = lastAmount(blockLines[0]);
+function companyPurchaseHeaderAmount(blockLines, headerLine = "") {
+  const headerAmount = lastAmount(headerLine);
   if (headerAmount) return headerAmount;
   const detailIndex = blockLines.findIndex((line) => /\(as per details\)/i.test(line));
   for (let i = Math.max(0, detailIndex); i < Math.min(blockLines.length, detailIndex + 4); i += 1) {
@@ -611,7 +626,9 @@ function stopAtLastClosingBalance(lines) {
 }
 
 function isVoucherStart(line) {
-  return /^\d{1,2}[-/.][A-Za-z]{3}[-/.]\d{2,4}\b/.test(line) || /^\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}/.test(line);
+  if (/^\d{1,2}[-/.][A-Za-z]{3}[-/.]\d{2,4}\b/.test(line)) return true;
+  const numeric = String(line || "").match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})(?=\b|\s)/);
+  return Boolean(numeric && Number(numeric[2]) >= 1 && Number(numeric[2]) <= 12);
 }
 
 function isCompanyVoucherHeader(line) {
@@ -1124,7 +1141,10 @@ function reconcile(company, party) {
   const debitTotal = round2(debitNotes.reduce((sum, item) => sum + item.amount, 0));
   const addTotal = round2(addRows.reduce((sum, invoice) => sum + invoice.amount, 0));
   const lessTotal = round2(lessInvoices.reduce((sum, invoice) => sum + invoice.amount, 0));
-  const openingDiff = round2(party.openingBalance - company.openingBalance);
+  const positiveOpeningCells = usesLegacyNumericPartyLedger(party);
+  const openingDiff = positiveOpeningCells
+    ? round2(party.openingBalance - company.openingBalance)
+    : round2(company.openingBalance - party.openingBalance);
   const roundOff = round2(party.closingBalance % 1 ? Math.ceil(party.closingBalance) - party.closingBalance : 0);
   const companyClosing = isOdooStatement
     ? round2(party.closingBalance - openingDiff - tdsNotBooked - debitTotal - addTotal + lessTotal + roundOff)
@@ -1157,7 +1177,8 @@ function reconcile(company, party) {
       debitTotal,
       addTotal,
       lessTotal,
-      roundOff
+      roundOff,
+      positiveOpeningCells
     },
     verification: {
       formula: `G7(${companyClosing}) + OpeningDiff(${openingDiff}) + TDS(${tdsNotBooked}) + DEBIT/PAYMENT(${debitTotal}) + ADD(${addTotal}) - LESS(${lessTotal}) - ROUNDOFF(${roundOff}) = ${computed} = H62(${party.closingBalance})`,
@@ -1166,6 +1187,14 @@ function reconcile(company, party) {
       h63
     }
   };
+}
+
+function usesLegacyNumericPartyLedger(party) {
+  const invoices = party.invoices || [];
+  if (invoices.length < 20) return false;
+  const numericCount = invoices.filter((invoice) => /^\d+$/.test(String(invoice.ref || "").trim())).length;
+  const gstSalesCount = invoices.filter((invoice) => /\bGST SALES\b/i.test(invoice.source || "")).length;
+  return numericCount / invoices.length > 0.7 && gstSalesCount / invoices.length > 0.5;
 }
 
 function matchInvoices(companyInvoices, partyInvoices, party) {
@@ -1315,8 +1344,8 @@ async function writeReconciliationWorkbook(templatePath, outputPath, reco) {
   }
 
   sheet.getCell("G7").value = reco.company.closingBalance;
-  sheet.getCell("G10").value = Math.abs(reco.company.openingBalance);
-  sheet.getCell("G11").value = Math.abs(reco.party.openingBalance);
+  sheet.getCell("G10").value = reco.summary.positiveOpeningCells ? Math.abs(reco.company.openingBalance) : -Math.abs(reco.company.openingBalance);
+  sheet.getCell("G11").value = reco.summary.positiveOpeningCells ? Math.abs(reco.party.openingBalance) : -Math.abs(reco.party.openingBalance);
   sheet.getCell("G16").value = reco.summary.tdsNotBooked;
   sheet.getCell("H62").value = reco.party.closingBalance;
 
