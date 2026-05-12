@@ -45,6 +45,21 @@
         "addRows": 17,
         "lessRows": 0
       }
+    },
+    {
+      "name": "ACEPHARMA compact document ledger",
+      "companyLedger": "data/uploads/1778567105666-1a9bbc73-9e76-4f12-b3c2-23b42e8b5ad1-ACEPHARMA WC.pdf",
+      "partyLedgers": [
+        "data/uploads/1778567105669-15e8e384-d2e3-49e5-9e36-02577f9f48ff-ACEPHARMA DONE.PDF"
+      ],
+      "expect": {
+        "h63": 0,
+        "addTotal": 0,
+        "lessTotal": 77491,
+        "tdsNotBooked": 0,
+        "addRows": 0,
+        "lessRows": 2
+      }
     }
   ]
 }

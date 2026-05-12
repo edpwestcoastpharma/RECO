@@ -838,7 +838,8 @@ function parseCompactDocumentPartyLedger(lines, suppliedPartyName = "") {
       const date = parseDate(payment[1]);
       const marker = line.search(/NEFT|RTGS|CHQ|CASH|BANK/i);
       const amounts = compactAmounts(marker >= 0 ? line.slice(marker) : line);
-      payments.push({ ref: payment[2], key: `${normaliseRef(payment[2])}-${date}-${amounts[0] || 0}`, date, amount: amounts[0] || 0, source: line });
+      const amount = firstPositiveAmount(amounts);
+      payments.push({ ref: payment[2], key: `${normaliseRef(payment[2])}-${date}-${amount}`, date, amount, source: line });
       maxDate = date || maxDate;
       continue;
     }
@@ -905,6 +906,10 @@ function parseDebitCreditTablePartyLedger(lines, suppliedPartyName = "") {
 
 function compactAmounts(text) {
   return [...String(text || "").matchAll(/\d[\d,]*\.\d{2}/g)].map((match) => parseAmount(match[0]));
+}
+
+function firstPositiveAmount(amounts) {
+  return amounts.find((amount) => amount > 0) || 0;
 }
 
 function parseLegacyPartySale(lines, index, currentDate) {
@@ -1606,20 +1611,39 @@ function invoiceDatesCompatible(companyInvoice, partyInvoice) {
 }
 
 function findCompanyPaymentsNotInParty(companyPayments, partyPayments, party = {}) {
-  const available = new Map();
-  for (const payment of partyPayments) {
-    const key = paymentBucket(payment.amount);
-    available.set(key, (available.get(key) || 0) + 1);
+  const available = partyPayments
+    .map((payment, index) => ({ ...payment, index, remaining: Number(payment.amount || 0) }))
+    .filter((payment) => payment.remaining > 0);
+  const companyItems = companyPayments.map((payment, index) => ({
+    ...payment,
+    index,
+    remaining: Number(payment.amount || 0),
+    matched: false
+  }));
+
+  for (const payment of companyItems) {
+    if (payment.remaining <= 0) continue;
+    const exact = available.find((item) => item.remaining > 0 && paymentBucket(item.remaining) === paymentBucket(payment.remaining));
+    if (!exact) continue;
+    exact.remaining = 0;
+    payment.remaining = 0;
+    payment.matched = true;
   }
 
   const missing = [];
-  for (const payment of companyPayments) {
-    const key = paymentBucket(payment.amount);
-    const count = available.get(key) || 0;
-    if (count > 0) {
-      available.set(key, count - 1);
-    } else if (payment.amount > 0 && shouldIncludeMissingPayment(payment, party)) {
-      missing.push(payment);
+  for (const payment of companyItems) {
+    let remaining = payment.remaining;
+    if (remaining <= 0) continue;
+
+    for (const item of available) {
+      if (remaining <= 0.01) break;
+      if (item.remaining <= 0 || item.remaining > remaining + 0.01) continue;
+      remaining = round2(remaining - item.remaining);
+      item.remaining = 0;
+    }
+
+    if (remaining > 0.01 && shouldIncludeMissingPayment(payment, party)) {
+      missing.push({ ...payment, amount: remaining });
     }
   }
   return missing;
