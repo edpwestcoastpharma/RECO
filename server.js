@@ -321,6 +321,7 @@ function normaliseRef(ref) {
   value = normaliseAlphaNumericInvoiceRef(value);
   value = value.replace(/\(R\)$/i, "");
   value = value.replace(/^(INV\/\d{4}-\d{2}\/)0+(\d+)$/i, "$1$2");
+  if (/^0+\d+$/.test(value)) value = String(Number(value));
   if (/^G\d+[A-Z]$/i.test(value)) value = value.replace(/[A-Z]$/i, "");
   value = value.replace(/\/0+(\d+)$/g, "/$1");
   return value;
@@ -407,17 +408,26 @@ function parseLedgerPeriod(lines) {
     DEC: "12"
   };
   for (const line of lines.slice(0, 120)) {
-    const match = String(line || "").match(
+    const text = String(line || "");
+    const match = text.match(
       /(\d{1,2})-([A-Za-z]{3})-(\d{2,4})\s+to\s+(\d{1,2})-([A-Za-z]{3})-(\d{2,4})/i
     );
-    if (!match) continue;
-    const startMonth = months[match[2].slice(0, 3).toUpperCase()];
-    const endMonth = months[match[5].slice(0, 3).toUpperCase()];
-    if (!startMonth || !endMonth) continue;
-    return {
-      startDate: `${match[1].padStart(2, "0")}.${startMonth}.${match[3].slice(-2)}`,
-      endDate: `${match[4].padStart(2, "0")}.${endMonth}.${match[6].slice(-2)}`
-    };
+    if (match) {
+      const startMonth = months[match[2].slice(0, 3).toUpperCase()];
+      const endMonth = months[match[5].slice(0, 3).toUpperCase()];
+      if (!startMonth || !endMonth) continue;
+      return {
+        startDate: `${match[1].padStart(2, "0")}.${startMonth}.${match[3].slice(-2)}`,
+        endDate: `${match[4].padStart(2, "0")}.${endMonth}.${match[6].slice(-2)}`
+      };
+    }
+    const numeric = text.match(/(?:From\s*)?(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\s+to\s+(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/i);
+    if (numeric) {
+      return {
+        startDate: `${numeric[1].padStart(2, "0")}.${numeric[2].padStart(2, "0")}.${numeric[3].slice(-2)}`,
+        endDate: `${numeric[4].padStart(2, "0")}.${numeric[5].padStart(2, "0")}.${numeric[6].slice(-2)}`
+      };
+    }
   }
   return { startDate: "", endDate: "" };
 }
@@ -450,11 +460,15 @@ function extractRefsFromLines(lines) {
   };
 
   const refPattern = "((?:R\\s*/\\s*)?\\d{2}\\s*-\\s*\\d{2}\\s*/\\s*0*\\d+)";
+  const slashRefPattern = "([A-Z]{2,10}\\s*/\\s*\\d{2}\\s*-\\s*\\d{2}\\s*/\\s*[A-Z]{1,6}\\s*-?\\s*0*\\d+)";
   const simpleRefPattern = "([A-Z]{1,6}\\s*\\d+[A-Z]?(?:\\(R\\))?)";
   const patterns = [
     /\bNew Ref\s+(INV\/\d{4}-\d{2}\/0*\d+)\b/gi,
     /\bAgst Ref\s+(INV\/\d{4}-\d{2}\/0*\d+)\b/gi,
     /\bINVO[A-Z]+\s+NO[-. :]*(INV\/\d{4}-\d{2}\/0*\d+)\b/gi,
+    new RegExp(`\\bNew Ref\\s+${slashRefPattern}\\b`, "gi"),
+    new RegExp(`\\bAgst Ref\\s+(?!BP\\s*/|BP\\b|JVO\\s*/|JVO\\b)${slashRefPattern}\\b`, "gi"),
+    new RegExp(`\\bINVO[A-Z]+\\s+NO[-. :]*${slashRefPattern}\\b`, "gi"),
     new RegExp(`\\bNew Ref\\s+${refPattern}\\b(?=[\\s,]|$)`, "gi"),
     new RegExp(`\\bAgst Ref\\s+(?!BP\\s*/|BP\\b)${refPattern}\\b(?=[\\s,]|$)`, "gi"),
     new RegExp(`\\bINVO[A-Z]+\\s+NO[-. ]*${refPattern}\\b(?=[\\s,]|$)`, "gi"),
@@ -573,14 +587,16 @@ function parseCompanyLedgerLines(allLines) {
 }
 
 function modernServiceLookback(lines, index) {
-  if (!/\bBy\s+\(as per details\).*?\bSERVICE PURCHASE WITH TDS\b/i.test(lines[index])) return [];
+  const nearby = lines.slice(Math.max(0, index - 8), Math.min(lines.length, index + 2)).join(" ");
+  if (!/\bBy\b[\s\S]*?\(as per details\)/i.test(nearby)) return [];
+  if (!/\b(?:SERVICE PURCHASE WITH TDS|RAW MATERIAL PURCHASE|TANGIBLE ASSETS PURCHASE|MISC\.?\s*MATERIAL PURCHASE)\b/i.test(nearby)) return [];
   const lookback = [];
   for (let j = index - 1; j >= Math.max(0, index - 14); j -= 1) {
     if (isCompanyVoucherHeader(lines[j]) || /\b(?:BANK PAYMENT|Opening Balance|Closing Balance)\b/i.test(lines[j])) break;
     if (/^(?:Carried Over|Brought Forward|continued|Date Particulars|WEST-COAST|Page\b)/i.test(lines[j])) continue;
     lookback.unshift(lines[j]);
   }
-  return lookback.some((line) => /\bINVO[A-Z]+\s+NO|^\s*(?:R\s*\/\s*)?\d{2}\s*-\s*\d{2}\s*\/\s*0*\d+/i.test(line)) ? lookback : [];
+  return lookback.some((line) => /\(as per details\)|\bINVO[A-Z]+\s+NO|^\s*(?:R\s*\/\s*)?\d{2}\s*-\s*\d{2}\s*\/\s*0*\d+/i.test(line)) ? lookback : [];
 }
 
 function pruneDuplicateBlockRefs(refs) {
@@ -631,6 +647,13 @@ function lastBalanceAmountAtLabel(lines, labelPattern) {
 
 function isCompanyPurchaseHeader(line, lines = [], index = 0) {
   if (/\bBy\s+\(as per details\)/i.test(line) && /\bPURCHASE\b/i.test(line)) return true;
+  const nearbyBefore = lines.slice(Math.max(0, index - 5), Math.min(lines.length, index + 3)).join(" ");
+  if (
+    /\b(?:RAW MATERIAL PURCHASE|TANGIBLE ASSETS PURCHASE|MISC\.?\s*MATERIAL PURCHASE|SERVICE PURCHASE WITH TDS)\b/i.test(line) &&
+    /\bBy\b[\s\S]*?\(as per details\)/i.test(nearbyBefore)
+  ) {
+    return true;
+  }
   const nearby = lines.slice(index, Math.min(lines.length, index + 8)).join(" ");
   return (
     (/^\s*(?:Dr\s*)?$/i.test(line) || /^\s*Dr\s+\(as per details\)/i.test(line) || (parseDate(line) && /\bDr\b/i.test(line))) &&
@@ -692,6 +715,14 @@ async function parsePartyLedger(filePath, suppliedPartyName = "") {
 function parsePartyLedgerLines(lines, suppliedPartyName = "") {
   if (lines.some((line) => /Partner ledger/i.test(line)) && lines.some((line) => /Ending Balance/i.test(line))) {
     return parseOdooPartnerLedger(lines, suppliedPartyName);
+  }
+
+  if (lines.some((line) => /Account Ledger of .* for the Period/i.test(line)) && lines.some((line) => /Document No\./i.test(line))) {
+    return parseCompactDocumentPartyLedger(lines, suppliedPartyName);
+  }
+
+  if (lines.some((line) => /Opening Bal\.\s*=\s*Rs\./i.test(line)) && lines.some((line) => /Vch\/Bill\s*No.*Debit.*Credit.*Balance/i.test(line))) {
+    return parseDebitCreditTablePartyLedger(lines, suppliedPartyName);
   }
 
   if (lines.some((line) => /Account Statement For/i.test(line)) && lines.some((line) => /\bBill No\b/i.test(line))) {
@@ -785,6 +816,95 @@ function parsePartyLedgerLines(lines, suppliedPartyName = "") {
     payments,
     maxDate: maxDateFromLines(lines)
   };
+}
+
+function parseCompactDocumentPartyLedger(lines, suppliedPartyName = "") {
+  const invoices = [];
+  const payments = [];
+  let closingBalance = 0;
+  let maxDate = "";
+
+  for (const line of lines) {
+    const invoice = line.match(/^(\d{1,2}\/\d{1,2}\/\d{4})\s*INV\s*0*(\d+)\s*Invoice\s+No\.:\s*0*\2/i);
+    if (invoice) {
+      const date = parseDate(invoice[1]);
+      const amounts = compactAmounts(line.slice(invoice[0].length));
+      invoices.push({ ref: invoice[2], key: invoiceKey(invoice[2], date), date, amount: amounts[0] || 0, source: line });
+      maxDate = date || maxDate;
+      continue;
+    }
+    const payment = line.match(/^(\d{1,2}\/\d{1,2}\/\d{4})\s*BRE\s*0*\d+.*?Ag\.Bill No\.?\s*INV-?0*(\d+)/i);
+    if (payment) {
+      const date = parseDate(payment[1]);
+      const marker = line.search(/NEFT|RTGS|CHQ|CASH|BANK/i);
+      const amounts = compactAmounts(marker >= 0 ? line.slice(marker) : line);
+      payments.push({ ref: payment[2], key: `${normaliseRef(payment[2])}-${date}-${amounts[0] || 0}`, date, amount: amounts[0] || 0, source: line });
+      maxDate = date || maxDate;
+      continue;
+    }
+    const closing = line.match(/Total\s*&\s*Closing Balance\s*:-(.+)/i);
+    if (closing) closingBalance = compactAmounts(closing[1]).at(-1) || closingBalance;
+  }
+
+  return {
+    ledgerType: "party-compact-document",
+    partyName: suppliedPartyName || guessPartyName(lines),
+    period: parseLedgerPeriod(lines),
+    openingBalance: 0,
+    closingBalance,
+    balanceHistory: [],
+    tdsTotal: 0,
+    invoices: dedupeInvoices(invoices.filter((invoice) => invoice.amount > 0)),
+    payments: payments.filter((payment) => payment.amount > 0),
+    maxDate
+  };
+}
+
+function parseDebitCreditTablePartyLedger(lines, suppliedPartyName = "") {
+  const invoices = [];
+  const payments = [];
+  const balanceHistory = [];
+  let closingBalance = 0;
+  let maxDate = "";
+
+  for (const line of lines) {
+    const date = parseDate(line);
+    if (date) maxDate = date;
+    const sale = line.match(/^(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})\s*Sale\s+([A-Z]{2,10}\/\d{2}-\d{2}\/[A-Z]{1,6}-?\d+)/i);
+    if (sale) {
+      const amounts = compactAmounts(line.slice(sale[0].length));
+      invoices.push({ ref: sale[2].toUpperCase(), key: normaliseRef(sale[2]), date, amount: amounts[0] || 0, source: line });
+      if (amounts.at(-1)) balanceHistory.push({ date, amount: amounts.at(-1) });
+      continue;
+    }
+    const receipt = line.match(/^(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})\s*Rcpt\s+([A-Z]{2,10}\/\d{2}-\d{2}\/[A-Z]-?\d+)/i);
+    if (receipt) {
+      const amounts = compactAmounts(line.slice(receipt[0].length));
+      payments.push({ ref: receipt[2].toUpperCase(), key: `${normaliseRef(receipt[2])}-${date}-${amounts[0] || 0}`, date, amount: amounts[0] || 0, source: line });
+      if (amounts.at(-1)) balanceHistory.push({ date, amount: amounts.at(-1) });
+      continue;
+    }
+    const closing = line.match(/Closing Bal\.\s*=\s*Rs\.\s*([\d, ]+\.\d{2})/i);
+    if (closing) closingBalance = parseAmount(closing[1]);
+  }
+
+  return {
+    ledgerType: "party-debit-credit-table",
+    partyName: suppliedPartyName || guessPartyName(lines),
+    period: parseLedgerPeriod(lines),
+    openingBalance: firstAmount((lines.find((line) => /Opening Bal\./i.test(line)) || "")),
+    closingBalance,
+    balanceHistory,
+    useBalanceHistoryForOpening: true,
+    tdsTotal: 0,
+    invoices: dedupeInvoices(invoices.filter((invoice) => invoice.amount > 0)),
+    payments: payments.filter((payment) => payment.amount > 0),
+    maxDate
+  };
+}
+
+function compactAmounts(text) {
+  return [...String(text || "").matchAll(/\d[\d,]*\.\d{2}/g)].map((match) => parseAmount(match[0]));
 }
 
 function parseLegacyPartySale(lines, index, currentDate) {
@@ -1095,6 +1215,7 @@ function combinePartyLedgers(parties) {
     openingBalance: parties.reduce((sum, p) => sum + p.openingBalance, 0),
     closingBalance: parties.reduce((sum, p) => sum + p.closingBalance, 0),
     balanceHistory: combineBalanceHistory(parties),
+    useBalanceHistoryForOpening: parties.some((p) => p.useBalanceHistoryForOpening),
     tdsTotal: parties.reduce((sum, p) => sum + p.tdsTotal, 0),
     invoices,
     payments: parties.flatMap((p) => p.payments || []),
@@ -1118,22 +1239,34 @@ function combineBalanceHistory(parties) {
 function applyCompanyPeriodToParty(company, party) {
   const cutoff = company.period?.endDate || "";
   if (!cutoff) return party;
+  const start = company.period?.startDate || "";
   const cutoffDate = parseDdMmYy(cutoff);
   if (cutoffDate.getTime() <= 0) return party;
+  const startDate = parseDdMmYy(start);
 
   const withinCutoff = (item) => {
     if (!item.date) return true;
-    return parseDdMmYy(item.date) <= cutoffDate;
+    const itemDate = parseDdMmYy(item.date);
+    if (itemDate > cutoffDate) return false;
+    if (party.useBalanceHistoryForOpening && startDate.getTime() > 0 && itemDate < startDate) return false;
+    return true;
   };
 
   const balanceAtCutoff = [...(party.balanceHistory || [])]
     .filter((balance) => balance.date && parseDdMmYy(balance.date) <= cutoffDate)
     .sort((a, b) => parseDdMmYy(b.date) - parseDdMmYy(a.date))[0];
+  const openingAtStart =
+    party.useBalanceHistoryForOpening && startDate.getTime() > 0
+      ? [...(party.balanceHistory || [])]
+          .filter((balance) => balance.date && parseDdMmYy(balance.date) < startDate)
+          .sort((a, b) => parseDdMmYy(b.date) - parseDdMmYy(a.date))[0]
+      : null;
 
   return {
     ...party,
     invoices: (party.invoices || []).filter(withinCutoff),
     payments: (party.payments || []).filter(withinCutoff),
+    openingBalance: openingAtStart?.amount ?? party.openingBalance,
     closingBalance: balanceAtCutoff?.amount || party.closingBalance,
     effectivePeriodEnd: cutoff
   };
@@ -1167,6 +1300,7 @@ function reconcile(company, party) {
   const lessInvoices = companyInvoices
     .filter((invoice) => {
       if (matched.companyIds.has(invoice.rowId)) return false;
+      if (party.ledgerType === "party-statement" && /^DN\//i.test(invoice.key || invoice.ref || "")) return false;
       if (!isOdooStatement) return true;
       if (!isWithinFy2526(invoice.postingDate || invoice.date)) return false;
       return !isYearEndProvision(invoice);
